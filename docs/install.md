@@ -30,6 +30,19 @@ Though the Quick Start material is written for Debian/Ubuntu, you can use it for
 
     The `k0s install controller` sub-command accepts the same flags and parameters as the `k0s controller`. Refer to [manual install](k0s-multi-node.md#installation-steps) for a custom config file example.
 
+    It is possible to set environment variables with the install command:
+
+    ```shell
+    sudo k0s install controller -e ETCD_UNSUPPORTED_ARCH=arm
+    ```
+
+    The system service can be reinstalled with the `--force` flag:
+
+    ```shell
+    sudo k0s install controller --single --force
+    sudo systemctl daemon-reload
+    ```
+
 3. Start k0s as a service
 
     To start the k0s service, run:
@@ -48,7 +61,7 @@ Though the Quick Start material is written for Debian/Ubuntu, you can use it for
 
     ```shell
     $ sudo k0s status
-    Version: v1.22.2+k0s.1
+    Version: v{{{ extra.k8s_version }}}+k0s.0
     Process ID: 436
     Role: controller
     Workloads: true
@@ -64,7 +77,7 @@ Though the Quick Start material is written for Debian/Ubuntu, you can use it for
     ```shell
     $ sudo k0s kubectl get nodes
     NAME   STATUS   ROLES    AGE    VERSION
-    k0s    Ready    <none>   4m6s   v1.22.3-k0s1
+    k0s    Ready    <none>   4m6s   v{{{ extra.k8s_version }}}+k0s
     ```
 
 ## Uninstall k0s

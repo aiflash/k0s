@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package reset
 
 import (
@@ -20,15 +21,15 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/k0sproject/k0s/pkg/cleanup"
+	"github.com/k0sproject/k0s/pkg/component/status"
+	"github.com/k0sproject/k0s/pkg/config"
+
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-
-	"github.com/k0sproject/k0s/pkg/cleanup"
-	"github.com/k0sproject/k0s/pkg/config"
-	"github.com/k0sproject/k0s/pkg/install"
 )
 
-type CmdOpts config.CLIOptions
+type command config.CLIOptions
 
 func NewResetCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -38,31 +39,29 @@ func NewResetCmd() *cobra.Command {
 			if runtime.GOOS == "windows" {
 				return fmt.Errorf("currently not supported on windows")
 			}
-			c := CmdOpts(config.GetCmdOpts())
+			c := command(config.GetCmdOpts())
 			return c.reset()
 		},
-		PreRunE: preRunValidateConfig,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			c := command(config.GetCmdOpts())
+			return config.PreRunValidateConfig(c.K0sVars)
+		},
 	}
 	cmd.SilenceUsage = true
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
 	cmd.Flags().AddFlagSet(config.GetCriSocketFlag())
+	cmd.Flags().AddFlagSet(config.FileInputFlag())
 	return cmd
 }
 
-func (c *CmdOpts) reset() error {
-	logger := logrus.New()
-	textFormatter := new(logrus.TextFormatter)
-	textFormatter.DisableTimestamp = true
-
-	logger.SetFormatter(textFormatter)
-
+func (c *command) reset() error {
 	if os.Geteuid() != 0 {
-		logger.Fatal("this command must be run as root!")
+		logrus.Fatal("this command must be run as root!")
 	}
 
-	k0sStatus, _ := install.GetStatusInfo(config.StatusSocket)
+	k0sStatus, _ := status.GetStatusInfo(config.StatusSocket)
 	if k0sStatus != nil && k0sStatus.Pid != 0 {
-		logger.Fatal("k0s seems to be running! please stop k0s before reset.")
+		logrus.Fatal("k0s seems to be running! please stop k0s before reset.")
 	}
 
 	// Get Cleanup Config
@@ -72,16 +71,8 @@ func (c *CmdOpts) reset() error {
 	}
 
 	err = cfg.Cleanup()
+	logrus.Info("k0s cleanup operations done.")
+	logrus.Warn("To ensure a full reset, a node reboot is recommended.")
 
-	logger.Info("k0s cleanup operations done. To ensure a full reset, a node reboot is recommended.")
 	return err
-}
-
-func preRunValidateConfig(_ *cobra.Command, _ []string) error {
-	c := CmdOpts(config.GetCmdOpts())
-	_, err := config.ValidateYaml(c.CfgFile, c.K0sVars)
-	if err != nil {
-		return err
-	}
-	return nil
 }

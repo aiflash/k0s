@@ -1,3 +1,19 @@
+/*
+Copyright 2021 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package runtime
 
 import (
@@ -6,10 +22,11 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-	pb "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
+	"google.golang.org/grpc/credentials/insecure"
+	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
-var _ ContainerRuntime = &CRIRuntime{}
+var _ ContainerRuntime = (*CRIRuntime)(nil)
 
 type CRIRuntime struct {
 	criSocketPath string
@@ -88,7 +105,7 @@ func getRuntimeClient(addr string) (pb.RuntimeServiceClient, *grpc.ClientConn, e
 }
 
 func getRuntimeClientConnection(addr string) (*grpc.ClientConn, error) {
-	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 	if err != nil {
 		errMsg := fmt.Errorf("connect endpoint %s, make sure you are running as root and the endpoint has been started: %w", addr, err)
 		logrus.Error(errMsg)

@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -20,8 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sirupsen/logrus"
-
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
@@ -33,14 +33,16 @@ type K0SControlAPI struct {
 	supervisor supervisor.Supervisor
 }
 
+var _ manager.Component = (*K0SControlAPI)(nil)
+
 // Init does currently nothing
-func (m *K0SControlAPI) Init() error {
+func (m *K0SControlAPI) Init(_ context.Context) error {
 	// We need to create a serving cert for the api
 	return nil
 }
 
 // Run runs k0s control api as separate process
-func (m *K0SControlAPI) Run(_ context.Context) error {
+func (m *K0SControlAPI) Start(_ context.Context) error {
 	// TODO: Make the api process to use some other user
 
 	selfExe, err := os.Executable()
@@ -54,7 +56,6 @@ func (m *K0SControlAPI) Run(_ context.Context) error {
 		DataDir: m.K0sVars.DataDir,
 		Args: []string{
 			"api",
-			fmt.Sprintf("--config=%s", m.ConfigPath),
 			fmt.Sprintf("--data-dir=%s", m.K0sVars.DataDir),
 		},
 	}
@@ -66,12 +67,3 @@ func (m *K0SControlAPI) Run(_ context.Context) error {
 func (m *K0SControlAPI) Stop() error {
 	return m.supervisor.Stop()
 }
-
-// Reconcile detects changes in configuration and applies them to the component
-func (m *K0SControlAPI) Reconcile() error {
-	logrus.Debug("reconcile method called for: K0SControlAPI")
-	return nil
-}
-
-// Healthy for health-check interface
-func (m *K0SControlAPI) Healthy() error { return nil }

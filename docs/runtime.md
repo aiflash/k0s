@@ -17,8 +17,8 @@ containerd config default > /etc/k0s/containerd.toml
 ```shell
 /var/lib/k0s/bin/containerd \
     --root=/var/lib/k0s/containerd \
-    --state=/var/lib/k0s/run/containerd \
-    --address=/var/lib/k0s/run/containerd.sock \
+    --state=/run/k0s/containerd \
+    --address=/run/k0s/containerd.sock \
     --config=/etc/k0s/containerd.toml
 ```
 
@@ -27,11 +27,11 @@ Next, add the following default values to the configuration file:
 ```toml
 version = 2
 root = "/var/lib/k0s/containerd"
-state = "/var/lib/k0s/run/containerd"
+state = "/run/k0s/containerd"
 ...
 
 [grpc]
-  address = "/var/lib/k0s/run/containerd.sock"
+  address = "/run/k0s/containerd.sock"
 ```
 
 Finally, if you want to change CRI look into:
@@ -122,12 +122,18 @@ Finally, if you want to change CRI look into:
 By default, CRI is set to runC. As such, you must configure Nvidia GPU support by replacing `runc` with `nvidia-container-runtime`:
 
 ```toml
-[plugins."io.containerd.runtime.v1.linux"]
-    shim = "containerd-shim"
-    runtime = "nvidia-container-runtime"
+[plugins."io.containerd.grpc.v1.cri".containerd]
+    default_runtime_name = "nvidia"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+    privileged_without_host_devices = false
+    runtime_engine = ""
+    runtime_root = ""
+    runtime_type = "io.containerd.runc.v1"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+    BinaryName = "/usr/bin/nvidia-container-runtime"
 ```
 
-**Note** Detailed instruction on how to run `nvidia-container-runtime` on your node is available [here](https://josephb.org/blog/containerd-nvidia/).
+**Note** Detailed instruction on how to run `nvidia-container-runtime` on your node is available [here](https://docs.nvidia.com/datacenter/cloud-native/kubernetes/install-k8s.html#install-nvidia-container-toolkit-nvidia-docker2).
 
 After editing the configuration, restart `k0s` to get containerd using the newly configured runtime.
 
@@ -137,6 +143,7 @@ After editing the configuration, restart `k0s` to get containerd using the newly
 
 Use the option `--cri-socket` to run a k0s worker with a custom CRI runtime. the option takes input in the form of `<type>:<socket_path>` (for `type`, use `docker` for a pure Docker setup and `remote` for anything else).
 
-To run k0s with a pre-existing Docker setup, run the worker with `k0s worker --cri-socket docker:unix:///var/run/docker.sock <token>`.
+### Using dockershim
 
-When `docker` is used as a runtime, k0s configures kubelet to create the dockershim socket at `/var/run/dockershim.sock`.
+To run k0s with a pre-existing Dockershim setup, run the worker with `k0s worker --cri-socket docker:unix:///var/run/cri-dockerd.sock <token>`.
+A detailed explanation on dockershim and a guide for installing cri-dockerd can be found in our [k0s dockershim guide](./docker-shim.md).

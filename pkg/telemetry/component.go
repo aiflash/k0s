@@ -1,3 +1,19 @@
+/*
+Copyright 2020 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package telemetry
 
 import (
@@ -5,7 +21,7 @@ import (
 	"time"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/k0sproject/k0s/pkg/constant"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
@@ -28,13 +44,13 @@ type Component struct {
 	stopCh chan struct{}
 }
 
-var _ component.Component = &Component{}
-var _ component.ReconcilerComponent = &Component{}
+var _ manager.Component = (*Component)(nil)
+var _ manager.Reconciler = (*Component)(nil)
 
 var interval = time.Minute * 10
 
 // Init set up for external service clients (segment, k8s api)
-func (c *Component) Init() error {
+func (c *Component) Init(_ context.Context) error {
 	c.log = logrus.WithField("component", "telemetry")
 
 	if segmentToken == "" {
@@ -58,7 +74,7 @@ func (c *Component) retrieveKubeClient(ch chan struct{}) {
 }
 
 // Run runs work cycle
-func (c *Component) Run(_ context.Context) error {
+func (c *Component) Start(_ context.Context) error {
 	return nil
 }
 
@@ -78,7 +94,7 @@ func (c *Component) Stop() error {
 }
 
 // Reconcile detects changes in configuration and applies them to the component
-func (c *Component) Reconcile(_ context.Context, clusterCfg *v1beta1.ClusterConfig) error {
+func (c *Component) Reconcile(ctx context.Context, clusterCfg *v1beta1.ClusterConfig) error {
 	logrus.Debug("reconcile method called for: Telemetry")
 	if !clusterCfg.Spec.Telemetry.Enabled {
 		return c.Stop()
@@ -96,23 +112,18 @@ func (c *Component) Reconcile(_ context.Context, clusterCfg *v1beta1.ClusterConf
 	wait.Until(func() {
 		c.retrieveKubeClient(initedCh)
 	}, time.Second, initedCh)
-	go c.run()
+	go c.run(ctx)
 	return nil
 }
 
-// Healthy checks health
-func (c *Component) Healthy() error {
-	return nil
-}
-
-func (c Component) run() {
+func (c Component) run(ctx context.Context) {
 	c.stopCh = make(chan struct{})
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			c.sendTelemetry()
+			c.sendTelemetry(ctx)
 		case <-c.stopCh:
 			return
 		}

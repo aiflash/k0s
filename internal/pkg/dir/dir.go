@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,14 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package dir
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
-
-	"github.com/k0sproject/k0s/internal/pkg/file"
 )
 
 // IsDirectory check the given path exists and is a directory
@@ -54,20 +53,11 @@ func Init(path string, perm os.FileMode) error {
 	if err := os.MkdirAll(path, perm); err != nil {
 		return err
 	}
-	// Check permissions in case directory already existed
-	if err := file.CheckPathPermissions(path, perm); err != nil {
-		return err
-	}
-
-	return nil
+	return os.Chmod(path, perm)
 }
 
 // Copy copies the content of a folder
 func Copy(src string, dst string) error {
-	cmd := exec.Command("cp", "-r", src, dst)
-	err := cmd.Run()
-	if err != nil {
-		return err
-	}
-	return nil
+	cmd := exec.Command("cp", "-r", "--", src, dst)
+	return cmd.Run()
 }

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package install
 
 import (
@@ -20,60 +21,59 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
-
-	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/pkg/config"
 	"github.com/k0sproject/k0s/pkg/install"
+
+	"github.com/spf13/cobra"
 )
 
-type CmdOpts config.CLIOptions
+type command config.CLIOptions
+
+type installFlags struct {
+	force   bool
+	envVars []string
+}
 
 func NewInstallCmd() *cobra.Command {
+	var installFlags installFlags
+
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install k0s on a brand-new system. Must be run as root (or with sudo)",
 	}
 
-	cmd.AddCommand(installControllerCmd())
-	cmd.AddCommand(installWorkerCmd())
+	cmd.AddCommand(installControllerCmd(&installFlags))
+	cmd.AddCommand(installWorkerCmd(&installFlags))
+	cmd.PersistentFlags().BoolVar(&installFlags.force, "force", false, "force init script creation")
+	cmd.PersistentFlags().StringArrayVarP(&installFlags.envVars, "env", "e", nil, "set environment variable")
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
 	return cmd
 }
 
-// the setup functions:
-// * Ensures that the proper users are created
-// * sets up startup and logging for k0s
-func (c *CmdOpts) setup(role string, args []string) error {
+// The setup functions:
+//   - Ensures that the proper users are created.
+//   - Sets up startup and logging for k0s.
+func (c *command) setup(role string, args []string, installFlags *installFlags) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("this command must be run as root")
 	}
 
-	// if cfgFile is not provided k0s will handle this so no need to check if the file exists.
-	if c.CfgFile != "" && !dir.IsDirectory(c.CfgFile) && !file.Exists(c.CfgFile) {
-		return fmt.Errorf("file %s does not exist", c.CfgFile)
-	}
 	if role == "controller" {
-		cfg, err := config.GetNodeConfig(c.CfgFile, c.K0sVars)
-		if err != nil {
-			return err
-		}
-		c.ClusterConfig = cfg
-		if err := install.CreateControllerUsers(c.ClusterConfig, c.K0sVars); err != nil {
+		if err := install.CreateControllerUsers(c.NodeConfig, c.K0sVars); err != nil {
 			return fmt.Errorf("failed to create controller users: %v", err)
 		}
 	}
-	err := install.EnsureService(args)
+	err := install.EnsureService(args, installFlags.envVars, installFlags.force)
 	if err != nil {
 		return fmt.Errorf("failed to install k0s service: %v", err)
 	}
 	return nil
 }
 
-// this command converts the file paths in the Cmd Opts struct to Absolute Paths
-// for flags passed to service init file, see the cmdFlagsToArgs func
-func (c *CmdOpts) convertFileParamsToAbsolute() (err error) {
+// This command converts the file paths in the command struct to absolute paths.
+// For flags passed to service init file, see the [cmdFlagsToArgs] func.
+func (c *command) convertFileParamsToAbsolute() (err error) {
 	// don't convert if cfgFile is empty
 
 	if c.CfgFile != "" {
@@ -96,15 +96,6 @@ func (c *CmdOpts) convertFileParamsToAbsolute() (err error) {
 		if !file.Exists(c.TokenFile) {
 			return fmt.Errorf("%s does not exist", c.TokenFile)
 		}
-	}
-	return nil
-}
-
-func preRunValidateConfig(_ *cobra.Command, _ []string) error {
-	c := CmdOpts(config.GetCmdOpts())
-	_, err := config.ValidateYaml(c.CfgFile, c.K0sVars)
-	if err != nil {
-		return err
 	}
 	return nil
 }

@@ -1,3 +1,19 @@
+/*
+Copyright 2021 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package controller
 
 import (
@@ -6,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/k0scloudprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -46,7 +62,7 @@ func DummyCommandBuilder(wg *sync.WaitGroup, cancelled *bool) CommandBuilder {
 
 type K0sCloudProviderSuite struct {
 	suite.Suite
-	ccp       component.Component
+	ccp       manager.Component
 	cancelled bool
 	wg        sync.WaitGroup
 }
@@ -66,7 +82,7 @@ func (suite *K0sCloudProviderSuite) SetupTest() {
 
 // TestInit covers the `Init()` function.
 func (suite *K0sCloudProviderSuite) TestInit() {
-	assert.Nil(suite.T(), suite.ccp.Init())
+	assert.Nil(suite.T(), suite.ccp.Init(context.TODO()))
 }
 
 // TestRunStop covers the scenario of issuing a `Start()`, and ensuring
@@ -74,20 +90,15 @@ func (suite *K0sCloudProviderSuite) TestInit() {
 // This is effectively testing the close-channel semantics baked into
 // `Stop()`, without worrying about what was actually running.
 func (suite *K0sCloudProviderSuite) TestRunStop() {
-	assert.Nil(suite.T(), suite.ccp.Init())
-	assert.Nil(suite.T(), suite.ccp.Run(context.Background()))
+	ctx := context.TODO()
+	assert.Nil(suite.T(), suite.ccp.Init(ctx))
+	assert.Nil(suite.T(), suite.ccp.Start(ctx))
 
 	// Ensures that the stopping mechanism actually closes the stop channel.
 	assert.Nil(suite.T(), suite.ccp.Stop())
 	suite.wg.Wait()
 
 	assert.Equal(suite.T(), true, suite.cancelled)
-}
-
-// TestHealthy covers the `Healthy()` function post-init.
-func (suite *K0sCloudProviderSuite) TestHealthy() {
-	assert.Nil(suite.T(), suite.ccp.Init())
-	assert.Nil(suite.T(), suite.ccp.Healthy())
 }
 
 // TestK0sCloudProviderTestSuite sets up the suite for testing.

@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -23,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,11 +75,14 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - nodes/metrics
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - pods
   - nodes
-  - nodes/stats
-  - namespaces
-  - configmaps
   verbs:
   - get
   - list
@@ -154,6 +158,7 @@ metadata:
   name: metrics-server
   namespace: kube-system
 spec:
+  replicas: 1
   selector:
     matchLabels:
       k8s-app: metrics-server
@@ -168,7 +173,7 @@ spec:
       containers:
       - args:
         - --cert-dir=/tmp
-        - --secure-port=443
+        - --secure-port=10250
         - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
         - --kubelet-use-node-status-port
         - --metric-resolution=15s
@@ -183,7 +188,7 @@ spec:
           periodSeconds: 10
         name: metrics-server
         ports:
-        - containerPort: 443
+        - containerPort: 10250
           name: https
           protocol: TCP
         readinessProbe:
@@ -207,6 +212,10 @@ spec:
           name: tmp-dir
       nodeSelector:
         kubernetes.io/os: linux
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
       priorityClassName: system-cluster-critical
       serviceAccountName: metrics-server
       volumes:
@@ -232,11 +241,13 @@ spec:
 
 // MetricServer is the reconciler implementation for metrics server
 type MetricServer struct {
-	log               *logrus.Entry
-	clusterConfig     *v1beta1.ClusterConfig
-	tickerDone        chan struct{}
+	log logrus.FieldLogger
+
 	K0sVars           constant.CfgVars
 	kubeClientFactory k8sutil.ClientFactoryInterface
+
+	clusterConfig *v1beta1.ClusterConfig
+	tickerDone    context.CancelFunc
 }
 
 type metricsConfig struct {
@@ -246,27 +257,27 @@ type metricsConfig struct {
 	MEMRequest string
 }
 
-var _ component.Component = &MetricServer{}
-var _ component.ReconcilerComponent = &MetricServer{}
+var _ manager.Component = (*MetricServer)(nil)
+var _ manager.Reconciler = (*MetricServer)(nil)
 
 // NewMetricServer creates new MetricServer reconciler
-func NewMetricServer(k0sVars constant.CfgVars, kubeClientFactory k8sutil.ClientFactoryInterface) (*MetricServer, error) {
-	log := logrus.WithFields(logrus.Fields{"component": "metricServer"})
+func NewMetricServer(k0sVars constant.CfgVars, kubeClientFactory k8sutil.ClientFactoryInterface) *MetricServer {
 	return &MetricServer{
-		log:               log,
+		log: logrus.WithFields(logrus.Fields{"component": "metricServer"}),
+
 		K0sVars:           k0sVars,
 		kubeClientFactory: kubeClientFactory,
-	}, nil
+	}
 }
 
 // Init does nothing
-func (m *MetricServer) Init() error {
+func (m *MetricServer) Init(_ context.Context) error {
 	return nil
 }
 
 // Run runs the metric server reconciler
-func (m *MetricServer) Run(ctx context.Context) error {
-	m.tickerDone = make(chan struct{})
+func (m *MetricServer) Start(ctx context.Context) error {
+	ctx, m.tickerDone = context.WithCancel(ctx)
 
 	msDir := path.Join(m.K0sVars.ManifestsDir, "metricserver")
 	err := dir.Init(msDir, constant.ManifestsDirMode)
@@ -301,7 +312,7 @@ func (m *MetricServer) Run(ctx context.Context) error {
 					continue
 				}
 				previousConfig = newConfig
-			case <-m.tickerDone:
+			case <-ctx.Done():
 				m.log.Info("metric server reconciler done")
 				return
 			}
@@ -314,7 +325,7 @@ func (m *MetricServer) Run(ctx context.Context) error {
 // Stop stops the reconciler
 func (m *MetricServer) Stop() error {
 	if m.tickerDone != nil {
-		close(m.tickerDone)
+		m.tickerDone()
 	}
 	return nil
 }
@@ -326,9 +337,6 @@ func (m *MetricServer) Reconcile(_ context.Context, clusterConfig *v1beta1.Clust
 	m.clusterConfig = clusterConfig
 	return nil
 }
-
-// Healthy is the health-check interface
-func (m *MetricServer) Healthy() error { return nil }
 
 // Mostly for calculating the resource needs based on node numbers. From https://github.com/kubernetes-sigs/metrics-server#scaling :
 // Starting from v0.5.0 Metrics Server comes with default resource requests that should guarantee good performance for most cluster configurations up to 100 nodes:

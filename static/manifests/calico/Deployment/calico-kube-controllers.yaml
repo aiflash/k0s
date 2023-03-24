@@ -31,11 +31,13 @@ spec:
           operator: Exists
         - key: node-role.kubernetes.io/master
           effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
       serviceAccountName: calico-kube-controllers
       priorityClassName: system-cluster-critical
       containers:
         - name: calico-kube-controllers
-          image: {{ .CalicoKubeControllersImage }}
+          image: "{{ .CalicoKubeControllersImage }}"
           imagePullPolicy: {{ .PullPolicy }}
           env:
             # Choose which controllers to run.
@@ -43,9 +45,19 @@ spec:
               value: node
             - name: DATASTORE_TYPE
               value: kubernetes
+          livenessProbe:
+            exec:
+              command:
+              - /usr/bin/check-status
+              - -l
+            periodSeconds: 10
+            initialDelaySeconds: 10
+            failureThreshold: 6
+            timeoutSeconds: 10
           readinessProbe:
             exec:
               command:
               - /usr/bin/check-status
               - -r
+            periodSeconds: 10
 

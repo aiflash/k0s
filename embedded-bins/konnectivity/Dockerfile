@@ -1,19 +1,22 @@
-ARG BUILDIMAGE=golang:1.16-alpine
+ARG BUILDIMAGE
 FROM $BUILDIMAGE AS build
 
+RUN apk add build-base git make protoc
+
 ARG VERSION
-ARG BUILD_GO_TAGS
-ARG BUILD_GO_CGO_ENABLED
-ARG BUILD_GO_FLAGS
-ARG BUILD_GO_LDFLAGS
-ARG BUILD_GO_LDFLAGS_EXTRA
-
-RUN apk add build-base git make
-
-RUN git clone -b v$VERSION --depth=1 https://github.com/kubernetes-sigs/apiserver-network-proxy.git /apiserver-network-proxy
+RUN git -c advice.detachedHead=false clone -b v$VERSION --depth=1 https://github.com/k0sproject/apiserver-network-proxy.git /apiserver-network-proxy
 WORKDIR /apiserver-network-proxy
+
+ARG TARGET_OS \
+  BUILD_GO_TAGS \
+  BUILD_GO_CGO_ENABLED \
+  BUILD_GO_FLAGS \
+  BUILD_GO_LDFLAGS \
+  BUILD_GO_LDFLAGS_EXTRA
+
 RUN go version
-RUN GO111MODULE=on go get github.com/golang/mock/mockgen@v1.4.4 && \
+RUN go install github.com/golang/mock/mockgen@v1.4.4 && \
+    go install github.com/golang/protobuf/protoc-gen-go@v1.4.3 && \
     make gen && \
     CGO_ENABLED=${BUILD_GO_CGO_ENABLED} \
     GOOS=linux \
@@ -25,4 +28,3 @@ RUN GO111MODULE=on go get github.com/golang/mock/mockgen@v1.4.4 && \
 
 FROM scratch
 COPY --from=build /apiserver-network-proxy/bin/proxy-server /bin/konnectivity-server
-CMD ["/bin/konnectivity-server"]

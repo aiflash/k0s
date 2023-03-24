@@ -4,6 +4,8 @@ You can create high availability for the control plane by distributing the contr
 
 ![k0s high availability](img/k0s_high_availability.png)
 
+**Note:** In this context even 2 node controlplane is considered HA even though it's not really HA from etcd point of view. The same requirement for [LB](#load-balancer) still applies.
+
 ## Network considerations
 
 You should plan to allocate the control plane nodes into different zones. This will avoid failures in case one zone fails.
@@ -22,30 +24,34 @@ The load balancer can be implemented in many different ways and k0s doesn't have
 
 ### Example configuration: HAProxy
 
-Change the default mode to tcp under the 'defaults' section of haproxy.cfg.
-
 Add the following lines to the end of the haproxy.cfg:
 
 ```txt
 frontend kubeAPI
     bind :6443
+    mode tcp
     default_backend kubeAPI_backend
 frontend konnectivity
     bind :8132
+    mode tcp
     default_backend konnectivity_backend
 frontend controllerJoinAPI
     bind :9443
+    mode tcp
     default_backend controllerJoinAPI_backend
 
 backend kubeAPI_backend
+    mode tcp
     server k0s-controller1 <ip-address1>:6443 check check-ssl verify none
     server k0s-controller2 <ip-address2>:6443 check check-ssl verify none
     server k0s-controller3 <ip-address3>:6443 check check-ssl verify none
 backend konnectivity_backend
+    mode tcp
     server k0s-controller1 <ip-address1>:8132 check check-ssl verify none
     server k0s-controller2 <ip-address2>:8132 check check-ssl verify none
     server k0s-controller3 <ip-address3>:8132 check check-ssl verify none
 backend controllerJoinAPI_backend
+    mode tcp
     server k0s-controller1 <ip-address1>:9443 check check-ssl verify none
     server k0s-controller2 <ip-address2>:9443 check check-ssl verify none
     server k0s-controller3 <ip-address3>:9443 check check-ssl verify none
@@ -59,7 +65,9 @@ listen stats
 
 The last block "listen stats" is optional, but can be helpful. It enables HAProxy statistics with a separate dashboard to monitor for example the health of each backend server. You can access it using a web browser:
 
-```http://<ip-addr>:9000```
+```txt
+http://<ip-addr>:9000
+```
 
 Restart HAProxy to apply the configuration changes.
 

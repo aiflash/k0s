@@ -29,30 +29,34 @@ on:
       - 'mkdocs.yml'
       - '*.md'
 
-env:
-  GO_VERSION: ^1.16
-  GO_VERSION_WIN: ^1.13
-
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v2
-      - name: codegen
-        run: |
-          make -j$(nproc) pkg/assets/zz_generated_offsets_linux.go static/gen_manifests.go
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Go caches
+        uses: actions/cache@v3
+        with:
+          key: ${{ runner.os }}-lint-go-caches-${{ hashFiles('go.sum') }}
+          path: |
+            build/cache
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+
+      - name: Check go.mod/go.sum to be consistent
+        run: make --always-make go.sum && git diff --exit-code
+
+      - name: Check generated code to be consistent
+        run: make codegen EMBEDDED_BINS_BUILDMODE=none && git diff --exit-code
+
+      - name: Run linter
         env:
           EMBEDDED_BINS_BUILDMODE: none
-
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v2
-        with:
-          version: v1.42
-          skip-pkg-cache: true
-          only-new-issues: true
-          skip-build-cache: true
-          config: .golangci.yml
-          args: --verbose
+          GOLANGCI_LINT_FLAGS: --out-format=github-actions
+        run: |
+          make lint

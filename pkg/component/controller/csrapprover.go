@@ -1,5 +1,5 @@
 /*
-Copyright 2020 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -33,7 +34,8 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
+	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 )
 
@@ -50,44 +52,37 @@ type csrRecognizer struct {
 }
 
 type CSRApprover struct {
-	L      *logrus.Entry
-	stopCh chan struct{}
+	L    *logrus.Entry
+	stop context.CancelFunc
 
 	ClusterConfig     *v1beta1.ClusterConfig
 	KubeClientFactory kubeutil.ClientFactoryInterface
-	leaderElector     LeaderElector
+	leaderElector     leaderelector.Interface
 	clientset         clientset.Interface
 }
 
+var _ manager.Component = (*CSRApprover)(nil)
+
 // NewCSRApprover creates the CSRApprover component
-func NewCSRApprover(c *v1beta1.ClusterConfig, leaderElector LeaderElector, kubeClientFactory k8sutil.ClientFactoryInterface) *CSRApprover {
+func NewCSRApprover(c *v1beta1.ClusterConfig, leaderElector leaderelector.Interface, kubeClientFactory kubeutil.ClientFactoryInterface) *CSRApprover {
 	d := atomic.Value{}
 	d.Store(true)
 	return &CSRApprover{
 		ClusterConfig:     c,
 		leaderElector:     leaderElector,
-		stopCh:            make(chan struct{}),
 		KubeClientFactory: kubeClientFactory,
 		L:                 logrus.WithFields(logrus.Fields{"component": "csrapprover"}),
 	}
 }
 
-func (a *CSRApprover) Healthy() error { return nil }
-
 // Stop stops the CSRApprover
 func (a *CSRApprover) Stop() error {
-	close(a.stopCh)
-	return nil
-}
-
-// Reconcile detects changes in configuration and applies them to the component
-func (a *CSRApprover) Reconcile() error {
-	logrus.Debug("reconcile method called for: CSRApprover")
+	a.stop()
 	return nil
 }
 
 // Init initializes the component needs
-func (a *CSRApprover) Init() error {
+func (a *CSRApprover) Init(_ context.Context) error {
 	var err error
 	a.clientset, err = a.KubeClientFactory.GetClient()
 	if err != nil {
@@ -98,8 +93,10 @@ func (a *CSRApprover) Init() error {
 }
 
 // Run every 10 seconds checks for newly issued CSRs and approves them
-func (a *CSRApprover) Run(ctx context.Context) error {
+func (a *CSRApprover) Start(ctx context.Context) error {
+	ctx, a.stop = context.WithCancel(ctx)
 	go func() {
+		defer a.stop()
 		ticker := time.NewTicker(10 * time.Second) // TODO: sometimes this should be refactored so it watches instead of polls for CSRs
 		defer ticker.Stop()
 		for {
@@ -109,8 +106,8 @@ func (a *CSRApprover) Run(ctx context.Context) error {
 				if err != nil {
 					a.L.Warnf("CSR approval failed: %s", err.Error())
 				}
-			case <-a.stopCh:
-				a.L.Info("CSR Approver done")
+			case <-ctx.Done():
+				a.L.Info("CSR Approver context done")
 				return
 			}
 		}

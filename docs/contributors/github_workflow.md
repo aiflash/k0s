@@ -1,6 +1,6 @@
-# Github Workflow
+# GitHub Workflow
 
-This guide assumes you have already cloned the upstream repo to your system via git clone, or via `go get github.com/k0sproject/k0s`.
+This guide assumes you have already cloned the upstream repo to your system via `git clone`, or via `go get github.com/k0sproject/k0s`.
 
 ## Fork The Project
 
@@ -10,7 +10,7 @@ This guide assumes you have already cloned the upstream repo to your system via 
 ## Adding the Forked Remote
 
 ```shell
-export GITHUB_USER={ your github's username }
+export GITHUB_USER={ your github username }
 ```
 
 ```shell
@@ -27,7 +27,10 @@ git push --set-upstream $GITHUB_USER main
 Your remotes should look something like this:
 
 ```shell
-$ git remote -v
+git remote -v
+```
+
+```shell
 origin  https://github.com/k0sproject/k0s (fetch)
 origin  no_push (push)
 my_fork git@github.com:{ github_username }/k0s.git (fetch)
@@ -45,12 +48,15 @@ git checkout -b my_feature_branch
 Rebase your branch:
 
 ```shell
-$ git fetch origin
-$ git rebase origin/main
+git fetch origin && \
+  git rebase origin/main
+```
+
+```shell
 Current branch my_feature_branch is up to date.
 ```
 
-Please don't use `git pull` instead of the above `fetch / rebase`. `git pull` does a merge, which leaves merge commits. These make the commit history messy and violate the principle that commits ought to be individually understandable and useful.
+Please don't use `git pull` instead of the above `fetch` / `rebase`. `git pull` does a merge, which leaves merge commits. These make the commit history messy and violate the principle that commits ought to be individually understandable and useful.
 
 ## Commit & Push
 
@@ -60,7 +66,44 @@ Commit and sign your changes:
 git commit --signoff
 ```
 
-The commit message should have a short title as first line, an empty line and then a longer description that explains why the change was made, unless it is obvious.
+The commit message should have a [short](https://cbea.ms/git-commit/#limit-50), [capitalized](https://cbea.ms/git-commit/#capitalize) title [without trailing period](https://cbea.ms/git-commit/#end) as first line. After the title
+a [blank line](https://cbea.ms/git-commit/#separate) and then a longer description that [explains why](https://cbea.ms/git-commit/#why-not-how) the change was made, unless it is obvious.
+
+Use [imperative mood](https://cbea.ms/git-commit/#imperative) in the commit message.
+
+For example:
+
+```text
+Summarize changes in around 50 characters or less
+
+More detailed explanatory text, if necessary. Wrap it to about 72
+characters or so. In some contexts, the first line is treated as the
+subject of the commit and the rest of the text as the body. The
+blank line separating the summary from the body is critical (unless
+you omit the body entirely); various tools like `log`, `shortlog`
+and `rebase` can get confused if you run the two together.
+
+Explain the problem that this commit is solving. Focus on why you
+are making this change as opposed to how (the code explains that).
+Are there side effects or other unintuitive consequences of this
+change? Here's the place to explain them.
+
+Further paragraphs come after blank lines.
+
+ - Bullet points are okay, too
+
+ - Typically a hyphen or asterisk is used for the bullet, preceded
+   by a single space, with blank lines in between.
+
+If you use an issue tracker, put references to them at the bottom,
+like this:
+
+Fixes: https://github.com/k0sproject/k0s/issues/373
+See also: #456, #789
+
+Signed-off-by: Name Lastname <user@example.com>
+
+```
 
 You can go back and edit/build/test some more, then `commit --amend` in a few cycles.
 
@@ -72,7 +115,9 @@ git push --set-upstream my_fork my_feature_branch
 
 ## Open a Pull Request
 
-[Github Docs](https://docs.github.com/en/free-pro-team@latest/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request-from-a-fork)
+See GitHub's docs on how to [create a pull request from a fork][pr-from-fork].
+
+[pr-from-fork]: https://docs.github.com/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request-from-a-fork
 
 ### Get a code review
 

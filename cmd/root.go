@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,23 +13,18 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package cmd
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"os"
-
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-	"github.com/spf13/cobra/doc"
-	"github.com/spf13/viper"
-	"sigs.k8s.io/yaml"
 
 	"github.com/k0sproject/k0s/cmd/airgap"
 	"github.com/k0sproject/k0s/cmd/api"
 	"github.com/k0sproject/k0s/cmd/backup"
+	configcmd "github.com/k0sproject/k0s/cmd/config"
 	"github.com/k0sproject/k0s/cmd/controller"
 	"github.com/k0sproject/k0s/cmd/ctr"
 	"github.com/k0sproject/k0s/cmd/etcd"
@@ -46,27 +41,38 @@ import (
 	"github.com/k0sproject/k0s/cmd/validate"
 	"github.com/k0sproject/k0s/cmd/version"
 	"github.com/k0sproject/k0s/cmd/worker"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	k0slog "github.com/k0sproject/k0s/internal/pkg/log"
 	"github.com/k0sproject/k0s/pkg/build"
 	"github.com/k0sproject/k0s/pkg/config"
+
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
+	"github.com/spf13/cobra/doc"
 )
 
-var longDesc string
-
-type cliOpts config.CLIOptions
-
 func NewRootCmd() *cobra.Command {
+	var longDesc string
+
 	cmd := &cobra.Command{
 		Use:   "k0s",
 		Short: "k0s - Zero Friction Kubernetes",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			c := cliOpts(config.GetCmdOpts())
-			// set DEBUG from env, or from command flag
-			if viper.GetString("debug") != "" || c.Debug {
-				logrus.SetLevel(logrus.DebugLevel)
+			if config.Verbose {
+				k0slog.SetInfoLevel()
+			}
+
+			if config.Debug {
+				// TODO: check if it actually works and is not overwritten by something else
+				k0slog.SetDebugLevel()
+
 				go func() {
-					log.Println("starting debug server under", c.DebugListenOn)
-					log.Println(http.ListenAndServe(c.DebugListenOn, nil))
+					log := logrus.WithField("debug_server", config.DebugListenOn)
+					log.Debug("Starting debug server")
+					if err := http.ListenAndServe(config.DebugListenOn, nil); err != http.ErrServerClosed {
+						log.WithError(err).Debug("Failed to start debug server")
+					} else {
+						log.Debug("Debug server closed")
+					}
 				}()
 			}
 		},
@@ -77,6 +83,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(backup.NewBackupCmd())
 	cmd.AddCommand(controller.NewControllerCmd())
 	cmd.AddCommand(ctr.NewCtrCommand())
+	cmd.AddCommand(configcmd.NewConfigCmd())
 	cmd.AddCommand(etcd.NewEtcdCmd())
 	cmd.AddCommand(install.NewInstallCmd())
 	cmd.AddCommand(kubeconfig.NewKubeConfigCmd())
@@ -88,12 +95,12 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(stop.NewStopCmd())
 	cmd.AddCommand(sysinfo.NewSysinfoCmd())
 	cmd.AddCommand(token.NewTokenCmd())
-	cmd.AddCommand(validate.NewValidateCmd())
+	cmd.AddCommand(validate.NewValidateCmd()) // hidden+deprecated
 	cmd.AddCommand(version.NewVersionCmd())
 	cmd.AddCommand(worker.NewWorkerCmd())
 
 	cmd.AddCommand(newCompletionCmd())
-	cmd.AddCommand(newDefaultConfigCmd())
+	cmd.AddCommand(newDefaultConfigCmd()) // hidden+deprecated
 	cmd.AddCommand(newDocsCmd())
 
 	cmd.DisableAutoGenTag = true
@@ -102,10 +109,6 @@ func NewRootCmd() *cobra.Command {
 		longDesc = longDesc + "\n" + build.EulaNotice
 	}
 	cmd.Long = longDesc
-
-	// workaround for the data-dir location input for the kubectl command
-	cmd.PersistentFlags().AddFlagSet(config.GetKubeCtlFlagSet())
-
 	return cmd
 }
 
@@ -128,18 +131,10 @@ func newDocsCmd() *cobra.Command {
 }
 
 func newDefaultConfigCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "default-config",
-		Short: "Output the default k0s configuration yaml to stdout",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c := cliOpts(config.GetCmdOpts())
-			if err := c.buildConfig(); err != nil {
-				return err
-			}
-			return nil
-		},
-	}
-	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
+	cmd := configcmd.NewCreateCmd()
+	cmd.Hidden = true
+	cmd.Deprecated = "use 'k0s config create' instead"
+	cmd.Use = "default-config"
 	return cmd
 }
 
@@ -179,32 +174,24 @@ $ k0s completion fish > ~/.config/fish/completions/k0s.fish
 		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
 		Args:                  cobra.ExactValidArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
 			switch args[0] {
 			case "bash":
-				return cmd.Root().GenBashCompletion(os.Stdout)
+				return cmd.Root().GenBashCompletion(out)
 			case "zsh":
-				return cmd.Root().GenZshCompletion(os.Stdout)
+				return cmd.Root().GenZshCompletion(out)
 			case "fish":
-				return cmd.Root().GenFishCompletion(os.Stdout, true)
+				return cmd.Root().GenFishCompletion(out, true)
 			case "powershell":
-				return cmd.Root().GenPowerShellCompletion(os.Stdout)
+				return cmd.Root().GenPowerShellCompletion(out)
 			}
 			return nil
 		},
 	}
 }
 
-func (c *cliOpts) buildConfig() error {
-	conf, _ := yaml.Marshal(v1beta1.DefaultClusterConfig(config.DataDir))
-	fmt.Print(string(conf))
-	return nil
-}
-
 func Execute() {
-	// just a hack to trick linter which requires to check for errors
-	// cobra itself already prints out all errors that happen in subcommands
-	err := NewRootCmd().Execute()
-	if err != nil {
-		log.Fatal(err)
+	if err := NewRootCmd().Execute(); err != nil {
+		os.Exit(1)
 	}
 }

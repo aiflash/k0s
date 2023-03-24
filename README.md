@@ -1,16 +1,33 @@
+# k0s - The Zero Friction Kubernetes by Team Lens
+
 [![Go build](https://github.com/k0sproject/k0s/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/k0sproject/k0s/actions/workflows/go.yml?query=branch%3Amain)
-![k0s network conformance](https://github.com/k0sproject/k0s/workflows/k0s%20Check%20Network/badge.svg)
+[![k0s network conformance](https://github.com/k0sproject/k0s/workflows/k0s%20Check%20Network/badge.svg)](https://github.com/k0sproject/k0s/actions/workflows/check-network.yaml)
 [![Slack](https://img.shields.io/badge/join%20slack-%23k0s-4A154B.svg)](https://join.slack.com/t/k8slens/shared_invite/zt-wcl8jq3k-68R5Wcmk1o95MLBE5igUDQ)
 [![Go Reference](https://img.shields.io/badge/code%20reference-go.dev-bc42f5.svg)](https://pkg.go.dev/github.com/k0sproject/k0s)
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/k0sproject/k0s?label=latest%20stable) ![GitHub release (latest SemVer including pre-releases)](https://img.shields.io/github/v/release/k0sproject/k0s?include_prereleases&label=latest-release%20%28including+pre-release%29) ![GitHub commits since latest release (by date)](https://img.shields.io/github/commits-since/k0sproject/k0s/latest)
+![GitHub Repo stars](https://img.shields.io/github/stars/k0sproject/k0s?color=blueviolet&label=Stargazers)
+[![Releases](https://img.shields.io/github/downloads/k0sproject/k0s/total.svg)](https://github.com/k0sproject/k0s/tags?label=Downloads)
 
-![GitHub Repo stars](https://img.shields.io/github/stars/k0sproject/k0s?color=blueviolet&label=Stargazers) [![Releases](https://img.shields.io/github/downloads/k0sproject/k0s/total.svg)](https://github.com/k0sproject/k0s/tags?label=Downloads)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/k0sproject/k0s?label=latest%20stable)
+![GitHub release (latest SemVer including pre-releases)](https://img.shields.io/github/v/release/k0sproject/k0s?include_prereleases&label=latest-release%20%28including+pre-release%29) ![GitHub commits since latest release (by date)](https://img.shields.io/github/commits-since/k0sproject/k0s/latest)
 
-# k0s - Zero Friction Kubernetes
+![k0s-logo-dark](docs/img/k0s-logo-full-color-dark.svg#gh-dark-mode-only)
+![k0s-logo-light](docs/img/k0s-logo-full-color-light.svg#gh-light-mode-only)
 
-![k0s logo](docs/img/k0s-logo-full-color.svg)
+## What happened to Github stargazers?
 
-[k0s](https://k0sproject.io/) is an all-inclusive Kubernetes distribution, which is configured with all of the features needed to build a Kubernetes cluster and packaged as a single binary for ease of use.
+In September 2022 we made a human error while creating some build automation scripts&tools for the repo. Our automation accidentally changed the repo to a private one for few minutes. That itself is not a big deal and everything was restored quickly. But the nasty side effect is that it also removed all the stargazers at that point. :(
+
+Before that mishap we had 4776 stargazers, making k0s one of the most popular Kubernetes distro out there.
+
+**So if you are reading this, and have not yet starred this repo we would highly appreciate the :star: to get our numbers closer to what they used to be.
+
+## The Repository
+
+This repository ("k0s") is where Team Lens develops the [k0s](https://k8slens.dev/kubernetes) product together with the community. It is backed by a number of Kubernetes and cloud native ecosystem pioneers. This source code is available to everyone under the [Apache License 2.0](./LICENSE).
+
+## Overview
+
+[k0s](https://k8slens.dev/kubernetes) is an all-inclusive Kubernetes distribution, which is configured with all of the features needed to build a Kubernetes cluster and packaged as a single binary for ease of use.
 
 k0s fits well in any cloud environment, but can also be used in IoT gateways, Edge and Bare metal deployments due to its simple design, flexible deployment options and modest system requirements.
 
@@ -20,7 +37,7 @@ k0s fits well in any cloud environment, but can also be used in IoT gateways, Ed
 - Automatic lifecycle management with k0sctl: [upgrade](docs/upgrade.md), [backup and restore](docs/backup.md)
 - Modest [system requirements](docs/system-requirements.md) (1 vCPU, 1 GB RAM)
 - Vanilla upstream Kubernetes (with no changes)
-- Available as a single binary with no [OS dependencies](docs/os-deps.md) besides the kernel
+- Available as a single binary with no [external runtime dependencies](docs/external-runtime-deps.md) besides the kernel
 - Flexible deployment options with [control plane isolation](docs/networking.md#controller-worker-communication) as default
 - Scalable from a single node to large, [high-available](docs/high-availability.md) clusters
 - Supports custom [Container Network Interface (CNI)](docs/networking.md) plugins (Kube-Router is the default, Calico is offered as preconfigured alternative)
@@ -42,10 +59,16 @@ If you'd like to try k0s, please jump in to our:
 
 ## Join the Community
 
-- [Community Slack](https://join.slack.com/t/k8slens/shared_invite/zt-wcl8jq3k-68R5Wcmk1o95MLBE5igUDQ) - Request for support and help from the k0s community via Slack (shared Slack channel with Lens).
-- [Github Issues](https://github.com/k0sproject/k0s/issues) - Submit your issues and feature requests via Github.
+- [Lens Forums] - Request for support and help from the Lens and k0s community.
+- [GitHub Issues] - Submit your issues and feature requests via GitHub.
 
-We welcome your help in building k0s! If you are interested, we invite you to check out the [Contributing Guide](https://docs.k0sproject.io/latest/contributors/overview/) and the [Code of Conduct](https://docs.k0sproject.io/latest/contributors/CODE_OF_CONDUCT/).
+We welcome your help in building k0s! If you are interested, we invite you to
+check out the [Contributing Guide] and the [Code of Conduct].
+
+[Lens Forums]: https://forums.k8slens.dev/
+[GitHub Issues]: https://github.com/k0sproject/k0s/issues
+[Contributing Guide]: https://docs.k0sproject.io/latest/contributors/overview/
+[Code of Conduct]:https://docs.k0sproject.io/latest/contributors/CODE_OF_CONDUCT/
 
 ## Motivation
 
@@ -76,25 +99,36 @@ With strong enough arguments we might take in new addons, but in general those s
 
 ## Build
 
-`k0s` can be built in 3 different ways:
+The requirements for building k0s from source are as follows:
 
-Fetch official binaries (except `konnectivity-server`, which are built from source):
+- GNU Make (v3.81 or newer)
+- coreutils
+- findutils
+- Docker
+
+All of the compilation steps are performed inside Docker containers, no
+installation of Go is required.
+
+The k0s binary can be built in two different ways:
+
+The "k0s" way, self-contained, all binaries compiled from source, statically
+linked and embedded:
 
 ```shell
-make EMBEDDED_BINS_BUILDMODE=fetch
+make
 ```
 
-Build Kubernetes components from source as static binaries (requires docker):
-
-```shell
-make EMBEDDED_BINS_BUILDMODE=docker
-```
-
-Build k0s without any embedded binaries (requires that Kubernetes
-binaries are pre-installed on the runtime system):
+The "package maintainer" way, without any embedded binaries (requires that the
+required binaries are provided separately at runtime):
 
 ```shell
 make EMBEDDED_BINS_BUILDMODE=none
+```
+
+The embedded binaries can be built on their own:
+
+```shell
+make -C embedded-bins
 ```
 
 Builds can be done in parallel:
@@ -105,7 +139,12 @@ make -j$(nproc)
 
 ## Smoke test
 
-To run a smoke test after build:
+Additionally to the requirements for building k0s, the smoke tests _do_ require
+a local Go installation. you can run `./vars.sh go_version` in a terminal to
+find out the version that's being used to build k0s. It will print the
+corresponding Go version to stdout.
+
+To run a basic smoke test after build:
 
 ```shell
 make check-basic

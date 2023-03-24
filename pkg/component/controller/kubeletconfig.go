@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,58 +13,60 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 
 	"github.com/imdario/mergo"
+	"github.com/k0sproject/k0s/pkg/component/manager"
+	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
+	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
 	"github.com/k0sproject/k0s/pkg/constant"
-	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
 )
 
 // Dummy checks so we catch easily if we miss some interface implementation
-var _ component.ReconcilerComponent = &KubeletConfig{}
-var _ component.Component = &KubeletConfig{}
+var _ manager.Reconciler = (*KubeletConfig)(nil)
+var _ manager.Component = (*KubeletConfig)(nil)
 
 // KubeletConfig is the reconciler for generic kubelet configs
 type KubeletConfig struct {
-	kubeClientFactory k8sutil.ClientFactoryInterface
+	log logrus.FieldLogger
 
-	log              *logrus.Entry
-	k0sVars          constant.CfgVars
-	previousProfiles v1beta1.WorkerProfiles
+	kubeClientFactory k8sutil.ClientFactoryInterface
+	k0sVars           constant.CfgVars
+	previousProfiles  v1beta1.WorkerProfiles
 }
 
 // NewKubeletConfig creates new KubeletConfig reconciler
-func NewKubeletConfig(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface) (*KubeletConfig, error) {
-	log := logrus.WithFields(logrus.Fields{"component": "kubeletconfig"})
+func NewKubeletConfig(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface) *KubeletConfig {
 	return &KubeletConfig{
+		log: logrus.WithFields(logrus.Fields{"component": "kubeletconfig"}),
+
 		kubeClientFactory: clientFactory,
-		log:               log,
 		k0sVars:           k0sVars,
-	}, nil
+	}
 }
 
 // Init does nothing
-func (k *KubeletConfig) Init() error {
+func (k *KubeletConfig) Init(_ context.Context) error {
 	return nil
 }
 
@@ -74,16 +76,16 @@ func (k *KubeletConfig) Stop() error {
 }
 
 // Run dumps the needed manifest objects
-func (k *KubeletConfig) Run(_ context.Context) error {
+func (k *KubeletConfig) Start(_ context.Context) error {
 
 	return nil
 }
 
 // Reconcile detects changes in configuration and applies them to the component
-func (k *KubeletConfig) Reconcile(_ context.Context, clusterSpec *v1beta1.ClusterConfig) error {
+func (k *KubeletConfig) Reconcile(ctx context.Context, clusterSpec *v1beta1.ClusterConfig) error {
 	k.log.Debug("reconcile method called for: KubeletConfig")
 	// Check if we actually need to reconcile anything
-	defaultProfilesExist, err := k.defaultProfilesExist()
+	defaultProfilesExist, err := k.defaultProfilesExist(ctx)
 	if err != nil {
 		return err
 	}
@@ -105,13 +107,13 @@ func (k *KubeletConfig) Reconcile(_ context.Context, clusterSpec *v1beta1.Cluste
 	return nil
 }
 
-func (k *KubeletConfig) defaultProfilesExist() (bool, error) {
+func (k *KubeletConfig) defaultProfilesExist(ctx context.Context) (bool, error) {
 	c, err := k.kubeClientFactory.GetClient()
 	if err != nil {
 		return false, err
 	}
 	defaultProfileName := formatProfileName("default")
-	_, err = c.CoreV1().ConfigMaps("kube-system").Get(context.TODO(), defaultProfileName, v1.GetOptions{})
+	_, err = c.CoreV1().ConfigMaps("kube-system").Get(ctx, defaultProfileName, v1.GetOptions{})
 	if err != nil && errors.IsNotFound(err) {
 		return false, nil
 	} else if err != nil {
@@ -126,11 +128,10 @@ func (k *KubeletConfig) createProfiles(clusterSpec *v1beta1.ClusterConfig) (*byt
 		return nil, fmt.Errorf("failed to get DNS address for kubelet config: %v", err)
 	}
 	manifest := bytes.NewBuffer([]byte{})
-	defaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.DualStack.Enabled)
+	defaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.ClusterDomain)
 	defaultProfile["cgroupsPerQOS"] = true
-	defaultProfile["resolvConf"] = "{{.ResolvConf}}"
 
-	winDefaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.DualStack.Enabled)
+	winDefaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.ClusterDomain)
 	winDefaultProfile["cgroupsPerQOS"] = false
 
 	if err := k.writeConfigMapWithProfile(manifest, "default", defaultProfile); err != nil {
@@ -144,7 +145,7 @@ func (k *KubeletConfig) createProfiles(clusterSpec *v1beta1.ClusterConfig) (*byt
 		formatProfileName("default-windows"),
 	}
 	for _, profile := range clusterSpec.Spec.WorkerProfiles {
-		profileConfig := getDefaultProfile(dnsAddress, false) // Do not add dualstack feature gate to the custom profiles
+		profileConfig := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.ClusterDomain)
 
 		var workerValues unstructuredYamlObject
 		err := json.Unmarshal(profile.Config, &workerValues)
@@ -177,9 +178,18 @@ func (k *KubeletConfig) save(data []byte) error {
 	}
 
 	filePath := filepath.Join(kubeletDir, "kubelet-config.yaml")
-	if err := os.WriteFile(filePath, data, constant.CertMode); err != nil {
+	if err := file.WriteContentAtomically(filePath, data, constant.CertMode); err != nil {
 		return fmt.Errorf("can't write kubelet configuration config map: %v", err)
 	}
+
+	deprecationNotice := []byte(`The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+It is scheduled for removal in k0s 1.27.
+`)
+
+	if err := file.WriteContentAtomically(filepath.Join(kubeletDir, "deprecated.txt"), deprecationNotice, constant.CertMode); err != nil {
+		k.log.WithError(err).Warn("Failed to write deprecation notice")
+	}
+
 	return nil
 }
 
@@ -222,59 +232,27 @@ func (k *KubeletConfig) writeRbacRoleBindings(w io.Writer, configMapNames []stri
 	return tw.WriteToBuffer(w)
 }
 
-func getDefaultProfile(dnsAddress string, dualStack bool) unstructuredYamlObject {
+func getDefaultProfile(dnsAddress string, clusterDomain string) unstructuredYamlObject {
 	// the motivation to keep it like this instead of the yaml template:
 	// - it's easier to merge programatically defined structure
 	// - apart from map[string]interface there is no good way to define free-form mapping
 
+	cipherSuites := make([]string, len(constant.AllowedTLS12CipherSuiteIDs))
+	for i, cipherSuite := range constant.AllowedTLS12CipherSuiteIDs {
+		cipherSuites[i] = tls.CipherSuiteName(cipherSuite)
+	}
+
 	// for the authentication.x509.clientCAFile and volumePluginDir we want to use later binding so we put template placeholder instead of actual value there
 	profile := unstructuredYamlObject{
-		"apiVersion": "kubelet.config.k8s.io/v1beta1",
-		"kind":       "KubeletConfiguration",
-		"authentication": map[string]interface{}{
-			"anonymous": map[string]interface{}{
-				"enabled": false,
-			},
-			"webhook": map[string]interface{}{
-				"cacheTTL": "0s",
-				"enabled":  true,
-			},
-			"x509": map[string]interface{}{
-				"clientCAFile": "{{.ClientCAFile}}", // see line 174 explanation
-			},
-		},
-		"authorization": map[string]interface{}{
-			"mode": "Webhook",
-			"webhook": map[string]interface{}{
-				"cacheAuthorizedTTL":   "0s",
-				"cacheUnauthorizedTTL": "0s",
-			},
-		},
-		"clusterDNS":    []string{dnsAddress},
-		"clusterDomain": "cluster.local",
-		"tlsCipherSuites": []string{
-			"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-			"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-			"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
-			"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-			"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
-			"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-			"TLS_RSA_WITH_AES_256_GCM_SHA384",
-			"TLS_RSA_WITH_AES_128_GCM_SHA256",
-		},
-		"volumeStatsAggPeriod": "0s",
-		"volumePluginDir":      "{{.VolumePluginDir}}", // see line 174 explanation
-		"failSwapOn":           false,
-		"rotateCertificates":   true,
-		"serverTLSBootstrap":   true,
-		"eventRecordQPS":       0,
-		"kubeReservedCgroup":   "{{.KubeReservedCgroup}}",
-		"kubeletCgroups":       "{{.KubeletCgroups}}",
-	}
-	if dualStack {
-		profile["featureGates"] = map[string]bool{
-			"IPv6DualStack": true,
-		}
+		"apiVersion":         "kubelet.config.k8s.io/v1beta1",
+		"kind":               "KubeletConfiguration",
+		"clusterDNS":         []string{dnsAddress},
+		"clusterDomain":      clusterDomain,
+		"tlsCipherSuites":    cipherSuites,
+		"failSwapOn":         false,
+		"rotateCertificates": true,
+		"serverTLSBootstrap": true,
+		"eventRecordQPS":     0,
 	}
 	return profile
 }
@@ -285,6 +263,12 @@ kind: ConfigMap
 metadata:
   name: {{.Name}}
   namespace: kube-system
+  labels:
+    k0s.k0sproject.io/deprecated-since: "1.26"
+  annotations:
+    k0s.k0sproject.io/deprecated: |
+      The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+      It is scheduled for removal in k0s 1.27.
 data:
   kubelet: |
 {{ .KubeletConfigYAML | nindent 4 }}
@@ -296,6 +280,12 @@ kind: Role
 metadata:
   name: system:bootstrappers:kubelet-configmaps
   namespace: kube-system
+  labels:
+    k0s.k0sproject.io/deprecated-since: "1.26"
+  annotations:
+    k0s.k0sproject.io/deprecated: |
+      The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+      It is scheduled for removal in k0s 1.27.
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]
@@ -310,6 +300,12 @@ kind: RoleBinding
 metadata:
   name: system:bootstrappers:kubelet-configmaps
   namespace: kube-system
+  labels:
+    k0s.k0sproject.io/deprecated-since: "1.26"
+  annotations:
+    k0s.k0sproject.io/deprecated: |
+      The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+      It is scheduled for removal in k0s 1.27.
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -330,6 +326,3 @@ func mergeProfiles(a *unstructuredYamlObject, b unstructuredYamlObject) (unstruc
 	}
 	return *a, nil
 }
-
-// Health-check interface
-func (k *KubeletConfig) Healthy() error { return nil }

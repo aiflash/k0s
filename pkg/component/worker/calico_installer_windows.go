@@ -1,3 +1,19 @@
+/*
+Copyright 2020 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package worker
 
 import (
@@ -11,11 +27,15 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/k0sproject/k0s/internal/pkg/file"
+	"github.com/k0sproject/k0s/pkg/token"
+
+	"k8s.io/client-go/tools/clientcmd"
+
 	"github.com/Microsoft/hcsshim"
 	"github.com/avast/retry-go"
-	"github.com/k0sproject/k0s/pkg/token"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/sirupsen/logrus"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 type CalicoInstaller struct {
@@ -25,7 +45,9 @@ type CalicoInstaller struct {
 	ClusterDNS string
 }
 
-func (c CalicoInstaller) Init() error {
+var _ manager.Component = (*CalicoInstaller)(nil)
+
+func (c CalicoInstaller) Init(_ context.Context) error {
 	path := "C:\\bootstrap.ps1"
 
 	if err := os.Mkdir("C:\\CalicoWindows", 777); err != nil {
@@ -36,7 +58,7 @@ func (c CalicoInstaller) Init() error {
 		return fmt.Errorf("can't create CalicoWindows dir: %v", err)
 	}
 
-	if err := os.WriteFile(path, []byte(installCalicoPowershell), 777); err != nil {
+	if err := file.WriteContentAtomically(path, []byte(installCalicoPowershell), 777); err != nil {
 		return fmt.Errorf("can't unpack calico installer: %v", err)
 	}
 
@@ -87,27 +109,18 @@ func (c CalicoInstaller) SaveKubeConfig(path string) error {
 	if err != nil {
 		return fmt.Errorf("can't read response body: %v", err)
 	}
-	if err := os.WriteFile(path, b, 0700); err != nil {
+	if err := file.WriteContentAtomically(path, b, 0700); err != nil {
 		return fmt.Errorf("can't save kubeconfig for calico: %v", err)
 	}
 	posh := NewPowershell()
 	return posh.execute(fmt.Sprintf("C:\\bootstrap.ps1 -ServiceCidr \"%s\" -DNSServerIPs \"%s\"", c.CIDRRange, c.ClusterDNS))
 }
 
-func (c CalicoInstaller) Run(_ context.Context) error {
+func (c CalicoInstaller) Start(_ context.Context) error {
 	return nil
 }
 
 func (c CalicoInstaller) Stop() error {
-	return nil
-}
-
-func (c CalicoInstaller) Healthy() error {
-	return nil
-}
-
-func (c CalicoInstaller) Reconcile() error {
-	logrus.Debug("reconcile method called for: CalicoInstaller")
 	return nil
 }
 
@@ -140,7 +153,7 @@ func getSourceVip() (string, error) {
 	err := retry.Do(func() error {
 		ep, err := hcsshim.GetHNSEndpointByName("Calico_ep")
 		if err != nil {
-			logrus.WithError(err).Warning("can't get Calico_ep endpoint")
+			logrus.WithError(err).Warn("can't get Calico_ep endpoint")
 			return err
 		}
 		vip = ep.IPAddress.String()
@@ -159,13 +172,13 @@ func getSourceVip() (string, error) {
 // the original script is done by Tigera, Inc
 // and can be accessed over the web on https://docs.projectcalico.org/scripts/install-calico-windows.ps1
 const installCalicoPowershell = `
-# Copyright 2021 k0s authors
+# Copyright 2020 k0s authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http:#www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,

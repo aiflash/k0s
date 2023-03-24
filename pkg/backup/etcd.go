@@ -16,6 +16,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package backup
 
 import (
@@ -54,7 +55,7 @@ func (e etcdStep) Name() string {
 
 func (e etcdStep) Backup() (StepResult, error) {
 	ctx := context.TODO()
-	etcdClient, err := etcd.NewClient(e.certRootDir, e.etcdCertDir)
+	etcdClient, err := etcd.NewClient(e.certRootDir, e.etcdCertDir, nil)
 	if err != nil {
 		return StepResult{}, err
 	}

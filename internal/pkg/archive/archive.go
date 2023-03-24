@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package archive
 
 import (
@@ -23,6 +24,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/k0sproject/k0s/internal/pkg/file"
 
 	"github.com/sirupsen/logrus"
 )
@@ -36,13 +39,7 @@ func sanitizeExtractPath(dstDir string, filePath string) (string, error) {
 }
 
 // Extract the given tar.gz archive to given dst path
-func Extract(path, dst string) error {
-	input, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-
+func Extract(input io.Reader, dst string) error {
 	gzr, err := gzip.NewReader(input)
 	if err != nil {
 		return err
@@ -71,12 +68,10 @@ func Extract(path, dst string) error {
 				return fmt.Errorf("failed to decompress %s from archive: %w", header.Name, err)
 			}
 		case tar.TypeReg:
-			outFile, err := os.OpenFile(targetPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode())
-			if err != nil {
-				return fmt.Errorf("failed to decompress %s from archive: %w", header.Name, err)
-			}
-			defer outFile.Close()
-			if _, err := io.Copy(outFile, tarReader); err != nil {
+			if err := file.WriteAtomically(targetPath, header.FileInfo().Mode(), func(file io.Writer) error {
+				_, err := io.Copy(file, tarReader)
+				return err
+			}); err != nil {
 				return fmt.Errorf("failed to decompress %s from archive: %w", header.Name, err)
 			}
 

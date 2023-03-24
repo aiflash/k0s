@@ -2,7 +2,7 @@
 // +build linux
 
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -72,10 +72,23 @@ func KernelSetup() {
 	if !file.Exists("/proc/sys/net/bridge/bridge-nf-call-iptables") {
 		modprobe("br_netfilter")
 	}
+	// https://github.com/kubernetes/kubernetes/issues/108877
+	if !file.Exists("/proc/net/ip_tables_targets") {
+		modprobe("ip_tables")
+	}
 	enableSysCtl("net/ipv4/conf/all/forwarding")
 	enableSysCtl("net/ipv4/conf/default/forwarding")
 	enableSysCtl("net/ipv6/conf/all/forwarding")
 	enableSysCtl("net/ipv6/conf/default/forwarding")
 	enableSysCtl("net/bridge/bridge-nf-call-iptables")
 	enableSysCtl("net/bridge/bridge-nf-call-ip6tables")
+}
+
+// KernelMajorVersion returns the major version number of the running kernel
+func KernelMajorVersion() byte {
+	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return 0
+	}
+	return data[0] - '0'
 }

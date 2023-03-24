@@ -1,3 +1,19 @@
+/*
+Copyright 2020 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package controller
 
 import (
@@ -5,13 +21,12 @@ import (
 	"testing"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
+	"sigs.k8s.io/yaml"
 )
 
 type inMemorySaver map[string][]byte
-
-var dataDir string
 
 func (i inMemorySaver) Save(dst string, content []byte) error {
 	i[dst] = content
@@ -19,7 +34,8 @@ func (i inMemorySaver) Save(dst string, content []byte) error {
 }
 
 func TestCalicoManifests(t *testing.T) {
-	clusterConfig := v1beta1.DefaultClusterConfig(dataDir)
+	k0sVars := constant.GetConfig(t.TempDir())
+	clusterConfig := v1beta1.DefaultClusterConfig()
 	clusterConfig.Spec.Network.Calico = v1beta1.DefaultCalico()
 	clusterConfig.Spec.Network.Provider = "calico"
 	clusterConfig.Spec.Network.KubeRouter = nil
@@ -27,9 +43,8 @@ func TestCalicoManifests(t *testing.T) {
 	t.Run("must_write_crd_during_bootstrap", func(t *testing.T) {
 		saver := inMemorySaver{}
 		crdSaver := inMemorySaver{}
-		calico, err := NewCalico(k0sVars, crdSaver, saver)
-		require.NoError(t, err)
-		require.NoError(t, calico.Run(context.Background()))
+		calico := NewCalico(k0sVars, crdSaver, saver)
+		require.NoError(t, calico.Start(context.Background()))
 		require.NoError(t, calico.Stop())
 
 		for k := range crdSaver {
@@ -41,8 +56,7 @@ func TestCalicoManifests(t *testing.T) {
 	t.Run("must_write_only_non_crd_on_change", func(t *testing.T) {
 		saver := inMemorySaver{}
 		crdSaver := inMemorySaver{}
-		calico, err := NewCalico(k0sVars, crdSaver, saver)
-		require.NoError(t, err)
+		calico := NewCalico(k0sVars, crdSaver, saver)
 
 		_ = calico.processConfigChanges(calicoConfig{})
 
@@ -56,8 +70,7 @@ func TestCalicoManifests(t *testing.T) {
 		clusterConfig.Spec.Network.Calico.EnableWireguard = true
 		saver := inMemorySaver{}
 		crdSaver := inMemorySaver{}
-		calico, err := NewCalico(k0sVars, crdSaver, saver)
-		require.NoError(t, err)
+		calico := NewCalico(k0sVars, crdSaver, saver)
 		cfg, err := calico.getConfig(clusterConfig)
 		require.NoError(t, err)
 		_ = calico.processConfigChanges(cfg)
@@ -73,8 +86,7 @@ func TestCalicoManifests(t *testing.T) {
 		clusterConfig.Spec.Network.Calico.EnableWireguard = false
 		saver := inMemorySaver{}
 		crdSaver := inMemorySaver{}
-		calico, err := NewCalico(k0sVars, crdSaver, saver)
-		require.NoError(t, err)
+		calico := NewCalico(k0sVars, crdSaver, saver)
 
 		cfg, err := calico.getConfig(clusterConfig)
 		require.NoError(t, err)
@@ -92,8 +104,7 @@ func TestCalicoManifests(t *testing.T) {
 			clusterConfig.Spec.Network.Calico.IPAutodetectionMethod = "somemethod"
 			saver := inMemorySaver{}
 			crdSaver := inMemorySaver{}
-			calico, err := NewCalico(k0sVars, crdSaver, saver)
-			require.NoError(t, err)
+			calico := NewCalico(k0sVars, crdSaver, saver)
 			templateContext, err := calico.getConfig(clusterConfig)
 			require.NoError(t, err)
 			require.Equal(t, clusterConfig.Spec.Network.Calico.IPAutodetectionMethod, templateContext.IPAutodetectionMethod)
@@ -114,8 +125,7 @@ func TestCalicoManifests(t *testing.T) {
 			clusterConfig.Spec.Network.Calico.IPv6AutodetectionMethod = "anothermethod"
 			saver := inMemorySaver{}
 			crdSaver := inMemorySaver{}
-			calico, err := NewCalico(k0sVars, crdSaver, saver)
-			require.NoError(t, err)
+			calico := NewCalico(k0sVars, crdSaver, saver)
 			templateContext, err := calico.getConfig(clusterConfig)
 			require.NoError(t, err)
 			require.Equal(t, clusterConfig.Spec.Network.Calico.IPAutodetectionMethod, templateContext.IPAutodetectionMethod)

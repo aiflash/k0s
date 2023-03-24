@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,31 +13,40 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
-	"time"
-
-	"github.com/avast/retry-go"
-	"github.com/docker/libnetwork/resolvconf"
-	"github.com/sirupsen/logrus"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
+	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/internal/pkg/flags"
+	"github.com/k0sproject/k0s/internal/pkg/iptablesutils"
 	"github.com/k0sproject/k0s/internal/pkg/stringmap"
-	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/pkg/assets"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	kubeletv1beta1 "k8s.io/kubelet/config/v1beta1"
+	"k8s.io/utils/pointer"
+
+	"github.com/sirupsen/logrus"
+	"sigs.k8s.io/yaml"
 )
 
 // Kubelet is the component implementation to manage kubelet
@@ -45,15 +54,20 @@ type Kubelet struct {
 	CRISocket           string
 	EnableCloudProvider bool
 	K0sVars             constant.CfgVars
-	KubeletConfigClient *KubeletConfigClient
+	Kubeconfig          string
+	Configuration       kubeletv1beta1.KubeletConfiguration
+	StaticPods          StaticPods
 	LogLevel            string
-	Profile             string
 	dataDir             string
 	supervisor          supervisor.Supervisor
 	ClusterDNS          string
 	Labels              []string
+	Taints              []string
 	ExtraArgs           string
+	IPTablesMode        string
 }
+
+var _ manager.Component = (*Kubelet)(nil)
 
 type kubeletConfig struct {
 	ClientCAFile       string
@@ -62,11 +76,12 @@ type kubeletConfig struct {
 	KubeletCgroups     string
 	CgroupsPerQOS      bool
 	ResolvConf         string
+	StaticPodURL       string
 }
 
 // Init extracts the needed binaries
-func (k *Kubelet) Init() error {
-	cmds := []string{"kubelet", "xtables-legacy-multi"}
+func (k *Kubelet) Init(_ context.Context) error {
+	cmds := []string{"kubelet", "xtables-legacy-multi", "xtables-nft-multi"}
 
 	if runtime.GOOS == "windows" {
 		cmds = []string{"kubelet.exe"}
@@ -80,13 +95,28 @@ func (k *Kubelet) Init() error {
 	}
 
 	if runtime.GOOS == "linux" {
-		for _, symlink := range []string{"iptables-save", "iptables-restore", "ip6tables", "ip6tables-save", "ip6tables-restore"} {
+		iptablesMode := k.IPTablesMode
+		if iptablesMode == "" || iptablesMode == "auto" {
+			var err error
+			iptablesMode, err = iptablesutils.DetectHostIPTablesMode(k.K0sVars.BinDir)
+			if err != nil {
+				if KernelMajorVersion() < 5 {
+					iptablesMode = iptablesutils.ModeLegacy
+				} else {
+					iptablesMode = iptablesutils.ModeNFT
+				}
+				logrus.WithError(err).Infof("Failed to detect iptables mode, using iptables-%s by default", iptablesMode)
+			}
+		}
+		logrus.Infof("using iptables-%s", iptablesMode)
+		oldpath := fmt.Sprintf("xtables-%s-multi", iptablesMode)
+		for _, symlink := range []string{"iptables", "iptables-save", "iptables-restore", "ip6tables", "ip6tables-save", "ip6tables-restore"} {
 			symlinkPath := filepath.Join(k.K0sVars.BinDir, symlink)
 
 			// remove if it exist and ignore error if it doesn't
 			_ = os.Remove(symlinkPath)
 
-			err := os.Symlink("xtables-legacy-multi", symlinkPath)
+			err := os.Symlink(oldpath, symlinkPath)
 			if err != nil {
 				return fmt.Errorf("failed to create symlink %s: %w", symlink, err)
 			}
@@ -103,14 +133,23 @@ func (k *Kubelet) Init() error {
 }
 
 // Run runs kubelet
-func (k *Kubelet) Run(ctx context.Context) error {
+func (k *Kubelet) Start(ctx context.Context) error {
 	cmd := "kubelet"
+
+	var staticPodURL string
+	if k.StaticPods != nil {
+		var err error
+		if staticPodURL, err = k.StaticPods.ManifestURL(); err != nil {
+			return err
+		}
+	}
 
 	kubeletConfigData := kubeletConfig{
 		ClientCAFile:       filepath.Join(k.K0sVars.CertRootDir, "ca.crt"),
 		VolumePluginDir:    k.K0sVars.KubeletVolumePluginDir,
 		KubeReservedCgroup: "system.slice",
 		KubeletCgroups:     "/system.slice/containerd.service",
+		StaticPodURL:       staticPodURL,
 	}
 	if runtime.GOOS == "windows" {
 		cmd = "kubelet.exe"
@@ -118,18 +157,14 @@ func (k *Kubelet) Run(ctx context.Context) error {
 
 	logrus.Info("Starting kubelet")
 	kubeletConfigPath := filepath.Join(k.K0sVars.DataDir, "kubelet-config.yaml")
-	// get the "real" resolv.conf file (in systemd-resolvd bases system,
-	// this will return /run/systemd/resolve/resolv.conf
-	resolvConfPath := resolvconf.Path()
 
 	args := stringmap.StringMap{
-		"--root-dir":             k.dataDir,
-		"--config":               kubeletConfigPath,
-		"--bootstrap-kubeconfig": k.K0sVars.KubeletBootstrapConfigPath,
-		"--kubeconfig":           k.K0sVars.KubeletAuthConfigPath,
-		"--v":                    k.LogLevel,
-		"--runtime-cgroups":      "/system.slice/containerd.service",
-		"--cert-dir":             filepath.Join(k.dataDir, "pki"),
+		"--root-dir":        k.dataDir,
+		"--config":          kubeletConfigPath,
+		"--kubeconfig":      k.Kubeconfig,
+		"--v":               k.LogLevel,
+		"--runtime-cgroups": "/system.slice/containerd.service",
+		"--cert-dir":        filepath.Join(k.dataDir, "pki"),
 	}
 
 	if len(k.Labels) > 0 {
@@ -149,34 +184,24 @@ func (k *Kubelet) Run(ctx context.Context) error {
 		args["--cni-bin-dir"] = "C:\\k\\cni"
 		args["--cni-conf-dir"] = "C:\\k\\cni\\config"
 		args["--hostname-override"] = node
-		args["--cluster-domain"] = "cluster.local"
 		args["--hairpin-mode"] = "promiscuous-bridge"
 		args["--cert-dir"] = "C:\\var\\lib\\k0s\\kubelet_certs"
 	} else {
 		kubeletConfigData.CgroupsPerQOS = true
-		kubeletConfigData.ResolvConf = resolvConfPath
+		kubeletConfigData.ResolvConf = determineKubeletResolvConfPath()
 	}
 
 	if k.CRISocket != "" {
-		rtType, rtSock, err := SplitRuntimeConfig(k.CRISocket)
+		// Due to the removal of dockershim from kube 1.24, we no longer need to
+		// handle any special docker case
+		_, rtSock, err := SplitRuntimeConfig(k.CRISocket)
 		if err != nil {
 			return err
 		}
-		args["--container-runtime"] = rtType
-		shimPath := "unix:///var/run/dockershim.sock"
-		if runtime.GOOS == "windows" {
-			shimPath = "npipe:////./pipe/dockershim"
-		}
-		if rtType == "docker" {
-			args["--docker-endpoint"] = rtSock
-			// this endpoint is actually pointing to the one kubelet itself creates as the cri shim between itself and docker
-			args["--container-runtime-endpoint"] = shimPath
-		} else {
-			args["--container-runtime-endpoint"] = rtSock
-		}
+		args["--container-runtime-endpoint"] = rtSock
+
 	} else {
 		sockPath := path.Join(k.K0sVars.RunDir, "containerd.sock")
-		args["--container-runtime"] = "remote"
 		args["--container-runtime-endpoint"] = fmt.Sprintf("unix://%s", sockPath)
 		args["--containerd"] = sockPath
 	}
@@ -186,13 +211,13 @@ func (k *Kubelet) Run(ctx context.Context) error {
 		args["--cloud-provider"] = "external"
 	}
 
-	// Handle the extra args as last so they can be used to overrride some k0s "hardcodings"
+	// Handle the extra args as last so they can be used to override some k0s "hardcodings"
 	if k.ExtraArgs != "" {
 		extras := flags.Split(k.ExtraArgs)
 		args.Merge(extras)
 	}
 
-	logrus.Infof("starting kubelet with args: %v", args)
+	logrus.Debugf("starting kubelet with args: %v", args)
 	k.supervisor = supervisor.Supervisor{
 		Name:    cmd,
 		BinPath: assets.BinPath(cmd, k.K0sVars.BinDir),
@@ -201,29 +226,14 @@ func (k *Kubelet) Run(ctx context.Context) error {
 		Args:    args.ToArgs(),
 	}
 
-	err := retry.Do(func() error {
-		kubeletconfig, err := k.KubeletConfigClient.Get(ctx, k.Profile)
-		if err != nil {
-			logrus.Warnf("failed to get initial kubelet config with join token: %s", err.Error())
-			return err
-		}
-		tw := templatewriter.TemplateWriter{
-			Name:     "kubelet-config",
-			Template: kubeletconfig,
-			Data:     kubeletConfigData,
-			Path:     kubeletConfigPath,
-		}
-		err = tw.Write()
-		if err != nil {
-			return fmt.Errorf("failed to write kubelet config: %w", err)
-		}
-
-		return nil
-	},
-		retry.Delay(time.Millisecond*500),
-		retry.DelayType(retry.BackOffDelay))
+	kubeletconfig, err := k.prepareLocalKubeletConfig(kubeletConfigData)
 	if err != nil {
+		logrus.Warnf("failed to prepare local kubelet config: %s", err.Error())
 		return err
+	}
+	err = file.WriteContentAtomically(kubeletConfigPath, []byte(kubeletconfig), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write kubelet config: %w", err)
 	}
 
 	return k.supervisor.Supervise()
@@ -234,14 +244,34 @@ func (k *Kubelet) Stop() error {
 	return k.supervisor.Stop()
 }
 
-// Reconcile detects changes in configuration and applies them to the component
-func (k *Kubelet) Reconcile() error {
-	logrus.Debug("reconcile method called for: Kubelet")
-	return nil
-}
+func (k *Kubelet) prepareLocalKubeletConfig(kubeletConfigData kubeletConfig) (string, error) {
+	preparedConfig := k.Configuration.DeepCopy()
+	preparedConfig.Authentication.X509.ClientCAFile = kubeletConfigData.ClientCAFile // filepath.Join(k.K0sVars.CertRootDir, "ca.crt")
+	preparedConfig.VolumePluginDir = kubeletConfigData.VolumePluginDir               // k.K0sVars.KubeletVolumePluginDir
+	preparedConfig.KubeReservedCgroup = kubeletConfigData.KubeReservedCgroup
+	preparedConfig.KubeletCgroups = kubeletConfigData.KubeletCgroups
+	preparedConfig.ResolverConfig = pointer.String(kubeletConfigData.ResolvConf)
+	preparedConfig.CgroupsPerQOS = pointer.Bool(kubeletConfigData.CgroupsPerQOS)
+	preparedConfig.StaticPodURL = kubeletConfigData.StaticPodURL
 
-// Health-check interface
-func (k *Kubelet) Healthy() error { return nil }
+	if len(k.Taints) > 0 {
+		var taints []corev1.Taint
+		for _, taint := range k.Taints {
+			parsedTaint, err := parseTaint(taint)
+			if err != nil {
+				return "", fmt.Errorf("can't parse taints for profile config map: %v", err)
+			}
+			taints = append(taints, parsedTaint)
+		}
+		preparedConfig.RegisterWithTaints = taints
+	}
+
+	preparedConfigBytes, err := yaml.Marshal(preparedConfig)
+	if err != nil {
+		return "", fmt.Errorf("can't marshal kubelet config: %v", err)
+	}
+	return string(preparedConfigBytes), nil
+}
 
 const awsMetaInformationURI = "http://169.254.169.254/latest/meta-data/local-hostname"
 
@@ -261,4 +291,122 @@ func getNodeName(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("can't read aws hostname: %v", err)
 	}
 	return string(h), nil
+}
+
+func parseTaint(st string) (corev1.Taint, error) {
+	var taint corev1.Taint
+
+	var key string
+	var value string
+	var effect corev1.TaintEffect
+
+	parts := strings.Split(st, ":")
+	switch len(parts) {
+	case 1:
+		key = parts[0]
+	case 2:
+		effect = corev1.TaintEffect(parts[1])
+		if err := validateTaintEffect(effect); err != nil {
+			return taint, err
+		}
+
+		partsKV := strings.Split(parts[0], "=")
+		if len(partsKV) > 2 {
+			return taint, fmt.Errorf("invalid taint spec: %v", st)
+		}
+		key = partsKV[0]
+		if len(partsKV) == 2 {
+			value = partsKV[1]
+			if errs := validation.IsValidLabelValue(value); len(errs) > 0 {
+				return taint, fmt.Errorf("invalid taint spec: %v, %s", st, strings.Join(errs, "; "))
+			}
+		}
+	default:
+		return taint, fmt.Errorf("invalid taint spec: %v", st)
+	}
+
+	if errs := validation.IsQualifiedName(key); len(errs) > 0 {
+		return taint, fmt.Errorf("invalid taint spec: %v, %s", st, strings.Join(errs, "; "))
+	}
+
+	taint.Key = key
+	taint.Value = value
+	taint.Effect = effect
+
+	return taint, nil
+}
+
+func validateTaintEffect(effect corev1.TaintEffect) error {
+	if effect != corev1.TaintEffectNoSchedule && effect != corev1.TaintEffectPreferNoSchedule && effect != corev1.TaintEffectNoExecute {
+		return fmt.Errorf("invalid taint effect: %v, unsupported taint effect", effect)
+	}
+
+	return nil
+}
+
+// determineKubeletResolvConfPath returns the path to the resolv.conf file that
+// the kubelet should use.
+func determineKubeletResolvConfPath() string {
+	path := "/etc/resolv.conf"
+
+	// https://www.freedesktop.org/software/systemd/man/systemd-resolved.service.html#/etc/resolv.conf
+	// If it's likely that resolv.conf is pointing to a systemd-resolved
+	// nameserver, that nameserver won't be reachable from within containers.
+	// Try to use the alternative resolv.conf path used by systemd-resolved instead.
+	detected, err := hasSystemdResolvedNameserver(path)
+	if err != nil {
+		logrus.WithError(err).Infof("Error while trying to detect the presence of systemd-resolved, using resolv.conf: %s", path)
+		return path
+	}
+
+	if detected {
+		alternatePath := "/run/systemd/resolve/resolv.conf"
+		logrus.Infof("The file %s looks like it's managed by systemd-resolved, using resolv.conf: %s", path, alternatePath)
+		return alternatePath
+	}
+
+	logrus.Infof("Using resolv.conf: %s", path)
+	return path
+}
+
+// hasSystemdResolvedNameserver parses the given resolv.conf file and checks if
+// it contains 127.0.0.53 as the only nameserver. Then it is assumed to be
+// systemd-resolved managed.
+func hasSystemdResolvedNameserver(resolvConfPath string) (bool, error) {
+	f, err := os.Open(resolvConfPath)
+	if err != nil {
+		return false, err
+	}
+
+	defer f.Close()
+
+	// This is roughly how glibc and musl do it: check for "nameserver" followed
+	// by whitespace, then try to parse the next bytes as IP address,
+	// disregarding anything after any additional whitespace.
+	// https://sourceware.org/git/?p=glibc.git;a=blob;f=resolv/res_init.c;h=cce842fa9311c5bdba629f5e78c19746f75ef18e;hb=refs/tags/glibc-2.37#l396
+	// https://git.etalabs.net/cgit/musl/tree/src/network/resolvconf.c?h=v1.2.3#n62
+
+	nameserverLine := regexp.MustCompile(`^nameserver\s+(\S+)`)
+
+	lines := bufio.NewScanner(f)
+	systemdResolvedIPSeen := false
+	for lines.Scan() {
+		match := nameserverLine.FindSubmatch(lines.Bytes())
+		if len(match) < 1 {
+			continue
+		}
+		ip := net.ParseIP(string(match[1]))
+		if ip == nil {
+			continue
+		}
+		if systemdResolvedIPSeen || !ip.Equal(net.IP{127, 0, 0, 53}) {
+			return false, nil
+		}
+		systemdResolvedIPSeen = true
+	}
+	if err := lines.Err(); err != nil {
+		return false, err
+	}
+
+	return systemdResolvedIPSeen, nil
 }

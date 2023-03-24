@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,11 +24,11 @@ import (
 
 type ConfigSource interface {
 	// Release allows the config source to start sending config updates
-	Release(ctx context.Context) error
+	Release(context.Context)
 	// ResultChan provides the result channel where config updates are pushed by the source on it is released
 	ResultChan() <-chan *v1beta1.ClusterConfig
 	// Stop stops sending config events
-	Stop() error
+	Stop()
 	// NeedToStoreInitialConfig tells the configsource user if the initial config should be stored in the api or not
 	NeedToStoreInitialConfig() bool
 }

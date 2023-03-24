@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -34,6 +35,7 @@ import (
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
 	"github.com/k0sproject/k0s/pkg/certificate"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/etcd"
 	"github.com/k0sproject/k0s/pkg/supervisor"
@@ -51,10 +53,14 @@ type Etcd struct {
 	supervisor supervisor.Supervisor
 	uid        int
 	gid        int
+	ctx        context.Context
 }
 
+var _ manager.Component = (*Etcd)(nil)
+var _ manager.Ready = (*Etcd)(nil)
+
 // Init extracts the needed binaries
-func (e *Etcd) Init() error {
+func (e *Etcd) Init(_ context.Context) error {
 	var err error
 
 	if err = detectUnsupportedEtcdArch(); err != nil {
@@ -90,7 +96,7 @@ func (e *Etcd) syncEtcdConfig(peerURL, etcdCaCert, etcdCaCertKey string) ([]stri
 	var etcdResponse v1beta1.EtcdResponse
 	var err error
 	for i := 0; i < 20; i++ {
-		logrus.Infof("trying to sync etcd config")
+		logrus.Debugf("trying to sync etcd config")
 		etcdResponse, err = e.JoinClient.JoinEtcd(peerURL)
 		if err == nil {
 			break
@@ -101,17 +107,17 @@ func (e *Etcd) syncEtcdConfig(peerURL, etcdCaCert, etcdCaCertKey string) ([]stri
 		return nil, err
 	}
 
-	logrus.Infof("got cluster info: %v", etcdResponse.InitialCluster)
+	logrus.Debugf("got cluster info: %v", etcdResponse.InitialCluster)
 	// Write etcd ca cert&key
 	if file.Exists(etcdCaCert) && file.Exists(etcdCaCertKey) {
 		logrus.Warnf("etcd ca certs already exists, not gonna overwrite. If you wish to re-sync them, delete the existing ones.")
 	} else {
-		err = os.WriteFile(etcdCaCertKey, etcdResponse.CA.Key, constant.CertSecureMode)
+		err = file.WriteContentAtomically(etcdCaCertKey, etcdResponse.CA.Key, constant.CertSecureMode)
 		if err != nil {
 			return nil, err
 		}
 
-		err = os.WriteFile(etcdCaCert, etcdResponse.CA.Cert, constant.CertSecureMode)
+		err = file.WriteContentAtomically(etcdCaCert, etcdResponse.CA.Cert, constant.CertSecureMode)
 		if err != nil {
 			return nil, err
 		}
@@ -124,8 +130,13 @@ func (e *Etcd) syncEtcdConfig(peerURL, etcdCaCert, etcdCaCertKey string) ([]stri
 	return etcdResponse.InitialCluster, nil
 }
 
-// Run runs etcd
-func (e *Etcd) Run(ctx context.Context) error {
+// Run runs etcd if external cluster is not configured
+func (e *Etcd) Start(ctx context.Context) error {
+	e.ctx = ctx
+	if e.Config.IsExternalClusterUsed() {
+		return nil
+	}
+
 	etcdCaCert := filepath.Join(e.K0sVars.EtcdCertDir, "ca.crt")
 	etcdCaCertKey := filepath.Join(e.K0sVars.EtcdCertDir, "ca.key")
 	etcdServerCert := filepath.Join(e.K0sVars.EtcdCertDir, "server.crt")
@@ -152,15 +163,20 @@ func (e *Etcd) Run(ctx context.Context) error {
 		"--listen-peer-urls":            peerURL,
 		"--initial-advertise-peer-urls": peerURL,
 		"--name":                        name,
-		"--trusted-ca-file":             etcdCaCert,
-		"--cert-file":                   etcdServerCert,
-		"--key-file":                    etcdServerKey,
-		"--peer-trusted-ca-file":        etcdCaCert,
-		"--peer-key-file":               etcdPeerKey,
-		"--peer-cert-file":              etcdPeerCert,
-		"--log-level":                   e.LogLevel,
-		"--peer-client-cert-auth":       "true",
-		"--enable-pprof":                "false",
+		// Specifying a minimum TLS version is not yet possible in etcd,
+		// although support for it has already been merged upstream. Enable this
+		// flag once it's available in the etcd release that ships with k0s.
+		// https://github.com/etcd-io/etcd/pull/15156
+		// "--tls-min-version": "TLS1.2",
+		"--trusted-ca-file":       etcdCaCert,
+		"--cert-file":             etcdServerCert,
+		"--key-file":              etcdServerKey,
+		"--peer-trusted-ca-file":  etcdCaCert,
+		"--peer-key-file":         etcdPeerKey,
+		"--peer-cert-file":        etcdPeerCert,
+		"--log-level":             e.LogLevel,
+		"--peer-client-cert-auth": "true",
+		"--enable-pprof":          "false",
 	}
 
 	if file.Exists(filepath.Join(e.K0sVars.EtcdDataDir, "member", "snap", "db")) {
@@ -184,7 +200,23 @@ func (e *Etcd) Run(ctx context.Context) error {
 		args["--auth-token"] = auth
 	}
 
-	logrus.Infof("starting etcd with args: %v", args)
+	for name, value := range e.Config.ExtraArgs {
+		argName := fmt.Sprintf("--%s", name)
+		if _, ok := args[argName]; ok {
+			logrus.Warnf("overriding etcd flag with user provided value: %s", argName)
+		}
+		args[argName] = value
+	}
+
+	// The tls-min-version flag is not yet supported by etcd, but support for it
+	// has already been merged upstream. Once it becomes available, specifying a
+	// minimum version of TLS 1.3 _and_ a list of cipher suites will be rejected.
+	// https://github.com/etcd-io/etcd/pull/15156/files#diff-538c79cd00ec18cb43b5dddd5f36b979d9d050cf478a241304493284739d31bfR810-R813
+	if args["--cipher-suites"] == "" && args["--tls-min-version"] != "TLS1.3" {
+		args["--cipher-suites"] = constant.AllowedTLS12CipherSuiteNames()
+	}
+
+	logrus.Debugf("starting etcd with args: %v", args)
 
 	e.supervisor = supervisor.Supervisor{
 		Name:          "etcd",
@@ -205,12 +237,6 @@ func (e *Etcd) Stop() error {
 	return e.supervisor.Stop()
 }
 
-// Reconcile detects changes in configuration and applies them to the component
-func (e *Etcd) Reconcile() error {
-	logrus.Debug("reconcile method called for: Etcd")
-	return nil
-}
-
 func (e *Etcd) setupCerts(ctx context.Context) error {
 	etcdCaCert := filepath.Join(e.K0sVars.EtcdCertDir, "ca.crt")
 	etcdCaCertKey := filepath.Join(e.K0sVars.EtcdCertDir, "ca.key")
@@ -219,7 +245,7 @@ func (e *Etcd) setupCerts(ctx context.Context) error {
 		return fmt.Errorf("failed to create etcd ca: %w", err)
 	}
 
-	var eg errgroup.Group
+	eg, _ := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
 		// etcd client cert
@@ -278,16 +304,17 @@ func (e *Etcd) setupCerts(ctx context.Context) error {
 }
 
 // Health-check interface
-func (e *Etcd) Healthy() error {
+func (e *Etcd) Ready() error {
 	logrus.WithField("component", "etcd").Debug("checking etcd endpoint for health")
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(e.ctx, 1*time.Second)
 	defer cancel()
-	err := etcd.CheckEtcdReady(ctx, e.K0sVars.CertRootDir, e.K0sVars.EtcdCertDir)
+	err := etcd.CheckEtcdReady(ctx, e.K0sVars.CertRootDir, e.K0sVars.EtcdCertDir, e.Config)
 	return err
 }
 
 func detectUnsupportedEtcdArch() error {
-	if strings.Contains(runtime.GOARCH, "arm") {
+	// https://github.com/etcd-io/etcd/blob/v3.5.2/server/etcdmain/etcd.go#L467-L472
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		if os.Getenv("ETCD_UNSUPPORTED_ARCH") != runtime.GOARCH {
 			return fmt.Errorf("running ETCD on %s requires ETCD_UNSUPPORTED_ARCH=%s ", runtime.GOARCH, runtime.GOARCH)
 		}

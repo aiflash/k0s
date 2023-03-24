@@ -1,3 +1,19 @@
+/*
+Copyright 2020 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package telemetry
 
 import (
@@ -9,9 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/k0sproject/k0s/internal/pkg/machineid"
+	"github.com/k0sproject/k0s/internal/pkg/sysinfo/machineid"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/etcd"
+	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 )
 
 type telemetryData struct {
@@ -44,17 +60,17 @@ func (td telemetryData) asProperties() analytics.Properties {
 	}
 }
 
-func (c Component) collectTelemetry() (telemetryData, error) {
+func (c Component) collectTelemetry(ctx context.Context) (telemetryData, error) {
 	var err error
 	data := telemetryData{}
 
 	data.StorageType = c.getStorageType()
-	data.ClusterID, err = c.getClusterID()
+	data.ClusterID, err = c.getClusterID(ctx)
 
 	if err != nil {
 		return data, fmt.Errorf("can't collect cluster ID: %v", err)
 	}
-	wds, sums, err := c.getWorkerData()
+	wds, sums, err := c.getWorkerData(ctx)
 	if err != nil {
 		return data, fmt.Errorf("can't collect workers count: %v", err)
 	}
@@ -63,7 +79,7 @@ func (c Component) collectTelemetry() (telemetryData, error) {
 	data.WorkerData = wds
 	data.MEMTotal = sums.memTotal
 	data.CPUTotal = sums.cpuTotal
-	data.ControlPlaneNodesCount, err = c.getControlPlaneNodeCount()
+	data.ControlPlaneNodesCount, err = kubeutil.GetControlPlaneNodeCount(ctx, c.kubernetesClient)
 	if err != nil {
 		return data, fmt.Errorf("can't collect control plane nodes count: %v", err)
 	}
@@ -78,8 +94,8 @@ func (c Component) getStorageType() string {
 	return "unknown"
 }
 
-func (c Component) getClusterID() (string, error) {
-	ns, err := c.kubernetesClient.CoreV1().Namespaces().Get(context.Background(),
+func (c Component) getClusterID(ctx context.Context) (string, error) {
+	ns, err := c.kubernetesClient.CoreV1().Namespaces().Get(ctx,
 		"kube-system",
 		metav1.GetOptions{})
 	if err != nil {
@@ -89,8 +105,8 @@ func (c Component) getClusterID() (string, error) {
 	return fmt.Sprintf("kube-system:%s", ns.UID), nil
 }
 
-func (c Component) getWorkerData() ([]workerData, workerSums, error) {
-	nodes, err := c.kubernetesClient.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+func (c Component) getWorkerData(ctx context.Context) ([]workerData, workerSums, error) {
+	nodes, err := c.kubernetesClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, workerSums{}, err
 	}
@@ -100,10 +116,11 @@ func (c Component) getWorkerData() ([]workerData, workerSums, error) {
 	var cpuTotal int64
 	for idx, n := range nodes.Items {
 		wd := workerData{
-			"os":   n.Status.NodeInfo.OSImage,
-			"arch": n.Status.NodeInfo.Architecture,
-			"cpus": n.Status.Capacity.Cpu().Value(),
-			"mem":  n.Status.Capacity.Memory().ScaledValue(resource.Mega),
+			"os":      n.Status.NodeInfo.OSImage,
+			"arch":    n.Status.NodeInfo.Architecture,
+			"cpus":    n.Status.Capacity.Cpu().Value(),
+			"mem":     n.Status.Capacity.Memory().ScaledValue(resource.Mega),
+			"runtime": n.Status.NodeInfo.ContainerRuntimeVersion,
 		}
 		wds[idx] = wd
 		memTotal += n.Status.Capacity.Memory().ScaledValue(resource.Mega)
@@ -113,26 +130,8 @@ func (c Component) getWorkerData() ([]workerData, workerSums, error) {
 	return wds, workerSums{cpuTotal: cpuTotal, memTotal: memTotal}, nil
 }
 
-func (c Component) getControlPlaneNodeCount() (int, error) {
-	switch c.clusterConfig.Spec.Storage.Type {
-	case v1beta1.EtcdStorageType:
-		cl, err := etcd.NewClient(c.K0sVars.CertRootDir, c.K0sVars.EtcdCertDir)
-		if err != nil {
-			return 0, fmt.Errorf("can't get etcd client: %v", err)
-		}
-		data, err := cl.ListMembers(context.Background())
-		if err != nil {
-			return 0, fmt.Errorf("can't receive etcd cluster members: %v", err)
-		}
-		return len(data), nil
-	default:
-		c.log.WithField("storageType", c.clusterConfig.Spec.Storage.Type).Warning("can't get control planes count, unknown storage type")
-		return -1, nil
-	}
-}
-
-func (c Component) sendTelemetry() {
-	data, err := c.collectTelemetry()
+func (c Component) sendTelemetry(ctx context.Context) {
+	data, err := c.collectTelemetry(ctx)
 	if err != nil {
 		c.log.WithError(err).Warning("can't prepare telemetry data")
 		return
@@ -148,6 +147,7 @@ func (c Component) sendTelemetry() {
 	hostData.Extra["cpuArch"] = runtime.GOARCH
 
 	addSysInfo(&hostData)
+	c.addCustomData(ctx, &hostData)
 
 	c.log.WithField("data", data).WithField("hostdata", hostData).Info("sending telemetry")
 	if err := c.analyticsClient.Enqueue(analytics.Track{
@@ -160,7 +160,17 @@ func (c Component) sendTelemetry() {
 	}
 }
 
+func (c Component) addCustomData(ctx context.Context, analyticCtx *analytics.Context) {
+	cm, err := c.kubernetesClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "k0s-telemetry", metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	for k, v := range cm.Data {
+		analyticCtx.Extra[fmt.Sprintf("custom.%s", k)] = v
+	}
+}
+
 func machineID() string {
 	id, _ := machineid.Generate()
-	return id
+	return id.ID()
 }

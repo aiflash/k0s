@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,20 +13,21 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 
-	dirutil "github.com/k0sproject/k0s/internal/pkg/dir"
-	fileutil "github.com/k0sproject/k0s/internal/pkg/file"
+	"github.com/k0sproject/k0s/internal/pkg/dir"
+	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/pkg/assets"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
@@ -48,9 +49,11 @@ type ContainerD struct {
 	OCIBundlePath string
 }
 
+var _ manager.Component = (*ContainerD)(nil)
+
 // Init extracts the needed binaries
-func (c *ContainerD) Init() error {
-	g := new(errgroup.Group)
+func (c *ContainerD) Init(ctx context.Context) error {
+	g, _ := errgroup.WithContext(ctx)
 	for _, bin := range []string{"containerd", "containerd-shim", "containerd-shim-runc-v1", "containerd-shim-runc-v2", "runc"} {
 		b := bin
 		g.Go(func() error {
@@ -62,7 +65,7 @@ func (c *ContainerD) Init() error {
 }
 
 // Run runs containerD
-func (c *ContainerD) Run(_ context.Context) error {
+func (c *ContainerD) Start(_ context.Context) error {
 	logrus.Info("Starting containerD")
 
 	if err := c.setupConfig(); err != nil {
@@ -88,26 +91,17 @@ func (c *ContainerD) Run(_ context.Context) error {
 
 func (c *ContainerD) setupConfig() error {
 	// If the config file exists, use it as-is
-	if fileutil.Exists(confPath) {
+	if file.Exists(confPath) {
 		return nil
 	}
 
-	if err := dirutil.Init(filepath.Dir(confPath), 0755); err != nil {
+	if err := dir.Init(filepath.Dir(confPath), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(confPath, []byte(confTmpl), 0644)
+	return file.WriteContentAtomically(confPath, []byte(confTmpl), 0644)
 }
 
 // Stop stops containerD
 func (c *ContainerD) Stop() error {
 	return c.supervisor.Stop()
 }
-
-// Reconcile detects changes in configuration and applies them to the component
-func (c *ContainerD) Reconcile() error {
-	logrus.Debug("reconcile method called for: ContainerD")
-	return nil
-}
-
-// Health-check interface
-func (c *ContainerD) Healthy() error { return nil }

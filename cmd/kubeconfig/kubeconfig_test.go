@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kubeconfig
 
 import (
@@ -22,14 +23,13 @@ import (
 	"path"
 	"testing"
 
-	"github.com/stretchr/testify/suite"
+	"github.com/k0sproject/k0s/internal/testutil"
+	"github.com/k0sproject/k0s/pkg/certificate"
+	"github.com/k0sproject/k0s/pkg/constant"
+
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/k0sproject/k0s/internal/pkg/file"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/certificate"
-	"github.com/k0sproject/k0s/pkg/config"
-	"github.com/k0sproject/k0s/pkg/constant"
+	"github.com/stretchr/testify/suite"
 )
 
 // Define the suite, and absorb the built-in basic suite
@@ -47,11 +47,8 @@ spec:
   api:
     externalAddress: 10.0.0.86
 `
-	cfgFilePath, err := file.WriteTmpFile(yamlData, "k0s-config")
-	s.NoError(err)
-
-	c := CmdOpts(config.GetCmdOpts())
-	c.CfgFile = cfgFilePath
+	configGetter := testutil.NewConfigGetter(s.T(), yamlData, false, constant.GetConfig(""))
+	cfg := configGetter.FakeConfigFromFile()
 
 	caCert := `
 -----BEGIN CERTIFICATE-----
@@ -74,8 +71,10 @@ K3icRdyke+TCLl+YqsCKG2n95cK4CMMEm8a1KVWRZKwDqLD7rFdemNdmzCNlpFW/
 nzXu8A==
 -----END CERTIFICATE-----
 `
-	caCertPath, err := file.WriteTmpFile(caCert, "ca-cert")
-	s.NoError(err)
+
+	tmpDir := s.T().TempDir()
+	caCertPath := path.Join(tmpDir, "ca-cert")
+	s.Require().NoError(os.WriteFile(caCertPath, []byte(caCert), 0644))
 
 	caCertKey := `
 -----BEGIN RSA PRIVATE KEY-----
@@ -106,27 +105,27 @@ z+5UodDFCnUsfprMjfTdY2Vk99PT4++SrJ5iTOn7xgKRrd1MPkBv7SXwnPtxCBAK
 yJm2KSue0toWmkBFK8WMTjAvmAw3Z/qUhJRKoqCu3k6Mf8DNl6t+Uw==
 -----END RSA PRIVATE KEY-----
 `
-	caKeyPath, err := file.WriteTmpFile(caCertKey, "ca-key")
-	s.NoError(err)
+	caKeyPath := path.Join(tmpDir, "ca-key")
+	s.Require().NoError(os.WriteFile(caKeyPath, []byte(caCertKey), 0644))
 
 	userReq := certificate.Request{
 		Name:   "test-user",
 		CN:     "test-user",
-		O:      groups,
+		O:      "groups",
 		CACert: caCertPath,
 		CAKey:  caKeyPath,
 	}
 
-	k0sVars := constant.GetConfig(os.TempDir())
+	k0sVars := constant.GetConfig(s.T().TempDir())
 	certManager := certificate.Manager{
 		K0sVars: k0sVars,
 	}
-	err = os.Mkdir(path.Join(k0sVars.CertRootDir), 0755)
+
+	s.Require().NoError(os.MkdirAll(k0sVars.CertRootDir, 0755))
 
 	userCert, err := certManager.EnsureCertificate(userReq, "root")
-	s.NoError(err)
-	clusterAPIURL, err := c.getAPIURL()
-	s.NoError(err)
+	s.Require().NoError(err)
+	clusterAPIURL := cfg.Spec.API.APIAddressURL()
 
 	data := struct {
 		CACert     string
@@ -143,16 +142,14 @@ yJm2KSue0toWmkBFK8WMTjAvmAw3Z/qUhJRKoqCu3k6Mf8DNl6t+Uw==
 	}
 
 	var buf bytes.Buffer
+	s.Require().NoError(userKubeconfigTemplate.Execute(&buf, &data))
 
-	err = userKubeconfigTemplate.Execute(&buf, &data)
-	s.NoError(err)
-	kubeconfigPath, err := file.WriteTmpFile(buf.String(), "kubeconfig")
-	s.NoError(err)
+	kubeconfigPath := path.Join(tmpDir, "kubeconfig")
+	s.Require().NoError(os.WriteFile(kubeconfigPath, buf.Bytes(), 0644))
+
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.Equal("https://10.0.0.86:6443", config.Host)
-	_, err = v1beta1.ConfigFromString(yamlData, "")
-	s.NoError(err)
 }
 
 func TestCLITestSuite(t *testing.T) {

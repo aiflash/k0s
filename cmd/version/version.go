@@ -1,10 +1,28 @@
+/*
+Copyright 2021 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package version
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/k0sproject/k0s/pkg/build"
+
 	"github.com/spf13/cobra"
 )
 
@@ -29,7 +47,7 @@ func NewVersionCmd() *cobra.Command {
 				Konnectivity: build.KonnectivityVersion,
 			}
 
-			info.String()
+			info.Print(cmd.OutOrStdout())
 		},
 	}
 
@@ -49,19 +67,19 @@ type versionInfo struct {
 	Konnectivity string `json:"konnectivity,omitempty"`
 }
 
-func (v versionInfo) String() {
+func (v versionInfo) Print(w io.Writer) {
 	if all {
-		fmt.Println("k0s :", v.Version)
-		fmt.Println("runc :", v.Runc)
-		fmt.Println("containerd :", v.Containerd)
-		fmt.Println("kubernetes :", v.Kubernetes)
-		fmt.Println("kine :", v.Kine)
-		fmt.Println("etcd :", v.Etcd)
-		fmt.Println("konnectivity :", v.Konnectivity)
+		fmt.Fprintln(w, "k0s :", v.Version)
+		fmt.Fprintln(w, "runc :", v.Runc)
+		fmt.Fprintln(w, "containerd :", v.Containerd)
+		fmt.Fprintln(w, "kubernetes :", v.Kubernetes)
+		fmt.Fprintln(w, "kine :", v.Kine)
+		fmt.Fprintln(w, "etcd :", v.Etcd)
+		fmt.Fprintln(w, "konnectivity :", v.Konnectivity)
 	} else if isJsn {
 		jsn, _ := json.MarshalIndent(v, "", "   ")
-		fmt.Println(string(jsn))
+		fmt.Fprintln(w, string(jsn))
 	} else {
-		fmt.Println(v.Version)
+		fmt.Fprintln(w, v.Version)
 	}
 }

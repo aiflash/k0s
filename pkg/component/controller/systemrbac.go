@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -23,8 +24,8 @@ import (
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
-	"github.com/sirupsen/logrus"
 )
 
 // SystemRBAC implements system RBAC reconciler
@@ -32,20 +33,20 @@ type SystemRBAC struct {
 	manifestDir string
 }
 
+var _ manager.Component = (*SystemRBAC)(nil)
+
 // NewSystemRBAC creates new system level RBAC reconciler
-func NewSystemRBAC(manifestDir string) (*SystemRBAC, error) {
-	return &SystemRBAC{
-		manifestDir: manifestDir,
-	}, nil
+func NewSystemRBAC(manifestDir string) *SystemRBAC {
+	return &SystemRBAC{manifestDir}
 }
 
 // Init does nothing
-func (s *SystemRBAC) Init() error {
+func (s *SystemRBAC) Init(_ context.Context) error {
 	return nil
 }
 
 // Run reconciles the k0s related system RBAC rules
-func (s *SystemRBAC) Run(_ context.Context) error {
+func (s *SystemRBAC) Start(_ context.Context) error {
 	rbacDir := path.Join(s.manifestDir, "bootstraprbac")
 	err := dir.Init(rbacDir, constant.ManifestsDirMode)
 	if err != nil {
@@ -66,12 +67,6 @@ func (s *SystemRBAC) Run(_ context.Context) error {
 
 // Stop does currently nothing
 func (s *SystemRBAC) Stop() error {
-	return nil
-}
-
-// Reconcile detects changes in configuration and applies them to the component
-func (s *SystemRBAC) Reconcile() error {
-	logrus.Debug("reconcile method called for: SystemRBAC")
 	return nil
 }
 
@@ -114,7 +109,32 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group
   name: system:nodes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:nodes:autopilot
+rules:
+  - apiGroups: ["autopilot.k0sproject.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "pods/eviction", "namespaces"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:nodes:autopilot
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:nodes:autopilot
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:nodes
 `
-
-// Health-check interface
-func (s *SystemRBAC) Healthy() error { return nil }

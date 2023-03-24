@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,13 +13,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package etcd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
-	"path/filepath"
+	"time"
 
+	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/transport"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -33,25 +36,38 @@ type Client struct {
 }
 
 // NewClient creates new Client
-func NewClient(certDir string, etcdCertDir string) (*Client, error) {
+func NewClient(certDir, etcdCertDir string, etcdConf *v1beta1.EtcdConfig) (*Client, error) {
 	client := &Client{}
-	client.tlsInfo = transport.TLSInfo{
-		CertFile:      filepath.Join(certDir, "apiserver-etcd-client.crt"),
-		KeyFile:       filepath.Join(certDir, "apiserver-etcd-client.key"),
-		TrustedCAFile: filepath.Join(etcdCertDir, "ca.crt"),
-	}
 
-	tlsConfig, err := client.tlsInfo.ClientConfig()
-	if err != nil {
-		return nil, err
+	var tlsConfig *tls.Config
+	if etcdConf.IsTLSEnabled() {
+		client.tlsInfo = transport.TLSInfo{
+			CertFile:      etcdConf.GetCertFilePath(certDir),
+			KeyFile:       etcdConf.GetKeyFilePath(certDir),
+			TrustedCAFile: etcdConf.GetCaFilePath(etcdCertDir),
+		}
+
+		var err error
+		tlsConfig, err = client.tlsInfo.ClientConfig()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cfg := clientv3.Config{
-		Endpoints: []string{"https://127.0.0.1:2379"},
+		Endpoints: etcdConf.GetEndpoints(),
 		TLS:       tlsConfig,
 	}
-	cli, _ := clientv3.New(cfg)
+	return NewClientWithConfig(cfg)
+}
 
+func NewClientWithConfig(cfg clientv3.Config) (*Client, error) {
+	client := &Client{}
+
+	cli, err := clientv3.New(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("can't build etcd client: %w", err)
+	}
 	client.client = cli
 	client.Config = &cfg
 	return client, nil
@@ -135,4 +151,41 @@ func (c *Client) Health(ctx context.Context) error {
 
 	return err
 
+}
+
+// Write tries to write a new value with a given key and returns indicator if write operation succeed.
+func (c *Client) Write(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {
+
+	leaseResp, err := c.client.Lease.Grant(ctx, int64(ttl.Seconds()))
+
+	if err != nil {
+		return false, fmt.Errorf("can't get TTL lease: %w", err)
+	}
+
+	// always use notFound guard because otherwise
+	// library builds PUT request which is not implemented
+	// in the kine
+	txnResp, err := c.client.KV.Txn(ctx).If(
+		notFound(key),
+	).Then(
+		clientv3.OpPut(key, value,
+			clientv3.WithLease(leaseResp.ID),
+		),
+	).Commit()
+	if err != nil {
+		return false, fmt.Errorf("can't write to etcd: %w", err)
+	}
+	return txnResp.Succeeded, nil
+}
+
+func (c *Client) Read(ctx context.Context, key string) (*clientv3.GetResponse, error) {
+	resp, err := c.client.KV.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("can't read from etcd: %w", err)
+	}
+	return resp, nil
+}
+
+func notFound(key string) clientv3.Cmp {
+	return clientv3.Compare(clientv3.ModRevision(key), "=", 0)
 }

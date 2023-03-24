@@ -13,13 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package basic
 
 import (
 	"bytes"
-	"context"
 	"html/template"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -32,7 +33,7 @@ import (
 
 const configWithExternaladdress = `
 apiVersion: k0s.k0sproject.io/v1beta1
-kind: Cluster
+kind: ClusterConfig
 metadata:
   name: k0s
 spec:
@@ -42,6 +43,8 @@ spec:
 
 type BackupSuite struct {
 	common.FootlooseSuite
+	backupFunc  func() error
+	restoreFunc func() error
 }
 
 func (s *BackupSuite) getControllerConfig(ipAddress string) string {
@@ -62,7 +65,7 @@ func (s *BackupSuite) TestK0sGetsUp() {
 	s.PutFile("controller0", "/tmp/k0s.yaml", config)
 	s.PutFile("controller1", "/tmp/k0s.yaml", config)
 
-	s.Require().NoError(s.InitController(0, "--config=/tmp/k0s.yaml"))
+	s.Require().NoError(s.InitController(0, "--config=/tmp/k0s.yaml", "--enable-worker"))
 	s.Require().NoError(s.RunWorkers())
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
@@ -79,20 +82,12 @@ func (s *BackupSuite) TestK0sGetsUp() {
 	err = s.WaitForNodeReady(s.WorkerNode(1), kc)
 	s.Require().NoError(err)
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	s.Require().NoError(err)
-
-	podCount := len(pods.Items)
-
-	s.T().Logf("found %d pods in kube-system", podCount)
-	s.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	s.AssertSomeKubeSystemPods(kc)
 
 	s.T().Log("waiting to see kube-router pods ready")
-	s.Require().NoError(common.WaitForKubeRouterReady(kc), "kube-router did not start")
+	s.Require().NoError(common.WaitForKubeRouterReady(s.Context(), kc), "kube-router did not start")
 
-	s.Require().NoError(s.takeBackup())
+	s.Require().NoError(s.backupFunc())
 
 	snapshot := s.makeSnapshot(kc)
 
@@ -101,15 +96,17 @@ func (s *BackupSuite) TestK0sGetsUp() {
 	s.Require().NoError(s.StopController(s.ControllerNode(0)))
 	_ = s.StopController(s.ControllerNode(1)) // No error check as k0s might have actually exited since etcd is not really happy
 
-	s.Require().NoError(s.Reset(s.ControllerNode(0)))
-	s.Require().NoError(s.Reset(s.ControllerNode(1)))
+	// Reset will return an error because after starting the controller with --enable-worker
+	// k0s reset will try to delete /var/lib/k0s, which is not possible because it's a volume in docker.
+	_ = s.Reset(s.ControllerNode(0))
+	_ = s.Reset(s.ControllerNode(1))
 
-	s.Require().NoError(s.restoreBackup())
-	s.Require().NoError(s.InitController(0))
+	s.Require().NoError(s.restoreFunc())
+	s.Require().NoError(s.InitController(0, "--enable-worker"))
 	s.Require().NoError(s.WaitJoinAPI(s.ControllerNode(0)))
 
 	// Join the second controller as normally
-	s.Require().NoError(s.InitController(1, token))
+	s.Require().NoError(s.InitController(1, "--enable-worker", token))
 
 	s.Require().NoError(err)
 
@@ -123,6 +120,8 @@ func (s *BackupSuite) TestK0sGetsUp() {
 	s.Require().NoError(err)
 	// Matching object UIDs after restore guarantees we got the full state restored
 	s.Require().Equal(snapshot, snapshotAfterBackup)
+
+	s.Require().NoError(s.VerifyFileSystemRestore())
 }
 
 type snapshot struct {
@@ -134,7 +133,7 @@ type snapshot struct {
 func (s *BackupSuite) makeSnapshot(kc *kubernetes.Clientset) snapshot {
 	// Take some UIDs to be able to verify state has restored properly
 	namespaces := make(map[types.UID]string)
-	nsList, err := kc.CoreV1().Namespaces().List(context.TODO(), v1.ListOptions{})
+	nsList, err := kc.CoreV1().Namespaces().List(s.Context(), v1.ListOptions{})
 	s.Require().NoError(err)
 	for _, n := range nsList.Items {
 		namespaces[n.ObjectMeta.UID] = n.Name
@@ -142,13 +141,13 @@ func (s *BackupSuite) makeSnapshot(kc *kubernetes.Clientset) snapshot {
 
 	services := make(map[types.UID]string)
 	{
-		svc, err := kc.CoreV1().Services("default").Get(context.TODO(), "kubernetes", v1.GetOptions{})
+		svc, err := kc.CoreV1().Services("default").Get(s.Context(), "kubernetes", v1.GetOptions{})
 		s.Require().NoError(err)
 		services[svc.ObjectMeta.UID] = svc.Name
 	}
 
 	nodes := make(map[types.UID]string)
-	nodeList, err := kc.CoreV1().Nodes().List(context.TODO(), v1.ListOptions{})
+	nodeList, err := kc.CoreV1().Nodes().List(s.Context(), v1.ListOptions{})
 	s.Require().NoError(err)
 	for _, n := range nodeList.Items {
 		nodes[n.ObjectMeta.UID] = n.Name
@@ -161,32 +160,95 @@ func (s *BackupSuite) makeSnapshot(kc *kubernetes.Clientset) snapshot {
 	}
 }
 
-func (s *BackupSuite) takeBackup() error {
-	ssh, err := s.SSH(s.ControllerNode(0))
+func (s *BackupSuite) VerifyFileSystemRestore() error {
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
 	if err != nil {
 		return err
 	}
 	defer ssh.Disconnect()
 
-	out, err := ssh.ExecWithOutput("k0s backup --save-path /root/")
+	// Checking for containerd should be enough given https://github.com/k0sproject/k0s/issues/2420
+	// containerd may take a bit to start so we want to retry a few times
+	checkPID := func() bool {
+		_, err = ssh.ExecWithOutput(s.Context(), "/bin/pidof /var/lib/k0s/bin/containerd")
+		return err == nil
+	}
+
+	s.Eventuallyf(checkPID, 180*time.Second, 10*time.Second,
+		"fetching pidof containerd failed after 3 minutes with error: %v", err)
+	return nil
+}
+
+func (s *BackupSuite) takeBackup() error {
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
+	if err != nil {
+		return err
+	}
+	defer ssh.Disconnect()
+
+	out, err := ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s backup --save-path /root/")
 	if err != nil {
 		s.T().Errorf("backup failed with output:\n%s", out)
 		return err
 	}
+	s.T().Logf("backup taken successfully with output:\n%s", out)
+	return nil
+}
+
+func (s *BackupSuite) takeBackupStdout() error {
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
+	if err != nil {
+		return err
+	}
+	defer ssh.Disconnect()
+
+	out, err := ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s backup --save-path - > backup.tar.gz")
+	if err != nil {
+		s.T().Errorf("backup failed with output:\n%s", out)
+		return err
+	}
+
+	out, err = ssh.ExecWithOutput(s.Context(), "tar tf backup.tar.gz")
+	if err != nil {
+		s.T().Errorf("backup inspection failed with output:\n%s", out)
+		return err
+	}
+
 	s.T().Logf("backup taken succesfully with output:\n%s", out)
 	return nil
 }
 
 func (s *BackupSuite) restoreBackup() error {
-	ssh, err := s.SSH(s.ControllerNode(0))
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
 	if err != nil {
 		return err
 	}
 	defer ssh.Disconnect()
 
-	out, err := ssh.ExecWithOutput("k0s restore $(ls /root/k0s_backup_*.tar.gz)")
+	s.T().Log("restoring controller from file")
+
+	out, err := ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s restore $(ls /root/k0s_backup_*.tar.gz)")
 	if err != nil {
-		s.T().Errorf("restored failed with output:\n%s", out)
+		s.T().Errorf("restore failed with output:\n%s", out)
+		return err
+	}
+	s.T().Logf("restored succesfully with output:\n%s", out)
+
+	return nil
+}
+
+func (s *BackupSuite) restoreBackupStdin() error {
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
+	if err != nil {
+		return err
+	}
+	defer ssh.Disconnect()
+
+	s.T().Log("restoring controller from stdin")
+
+	out, err := ssh.ExecWithOutput(s.Context(), "cat backup.tar.gz | /usr/local/bin/k0s restore -")
+	if err != nil {
+		s.T().Errorf("restore failed with output:\n%s", out)
 		return err
 	}
 	s.T().Logf("restored succesfully with output:\n%s", out)
@@ -196,10 +258,24 @@ func (s *BackupSuite) restoreBackup() error {
 
 func TestBackupSuite(t *testing.T) {
 	s := BackupSuite{
-		common.FootlooseSuite{
+		FootlooseSuite: common.FootlooseSuite{
 			ControllerCount: 2,
 			WorkerCount:     2,
 		},
 	}
+	s.backupFunc = s.takeBackup
+	s.restoreFunc = s.restoreBackup
+	suite.Run(t, &s)
+}
+
+func TestBackupSuiteStream(t *testing.T) {
+	s := BackupSuite{
+		FootlooseSuite: common.FootlooseSuite{
+			ControllerCount: 2,
+			WorkerCount:     2,
+		},
+	}
+	s.backupFunc = s.takeBackupStdout
+	s.restoreFunc = s.restoreBackupStdin
 	suite.Run(t, &s)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -22,32 +23,39 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/k0sproject/k0s/internal/pkg/stringmap"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
 
 // APIServer implement the component interface to run kube api
 type APIServer struct {
-	ClusterConfig      *v1beta1.ClusterConfig
-	K0sVars            constant.CfgVars
-	LogLevel           string
-	Storage            component.Component
-	EnableKonnectivity bool
-	gid                int
-	supervisor         supervisor.Supervisor
-	uid                int
+	ClusterConfig             *v1beta1.ClusterConfig
+	K0sVars                   constant.CfgVars
+	LogLevel                  string
+	Storage                   manager.Component
+	EnableKonnectivity        bool
+	DisableEndpointReconciler bool
+	gid                       int
+	supervisor                supervisor.Supervisor
+	uid                       int
 }
+
+var _ manager.Component = (*APIServer)(nil)
+var _ manager.Ready = (*APIServer)(nil)
 
 var apiDefaultArgs = map[string]string{
 	"allow-privileged":                   "true",
@@ -56,7 +64,6 @@ var apiDefaultArgs = map[string]string{
 	"requestheader-username-headers":     "X-Remote-User",
 	"secure-port":                        "6443",
 	"anonymous-auth":                     "false",
-	"tls-cipher-suites":                  "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
 }
 
 const egressSelectorConfigTemplate = `
@@ -76,7 +83,7 @@ type egressSelectorConfig struct {
 }
 
 // Init extracts needed binaries
-func (a *APIServer) Init() error {
+func (a *APIServer) Init(_ context.Context) error {
 	var err error
 	a.uid, err = users.GetUID(constant.ApiserverUser)
 	if err != nil {
@@ -86,9 +93,9 @@ func (a *APIServer) Init() error {
 }
 
 // Run runs kube api
-func (a *APIServer) Run(_ context.Context) error {
+func (a *APIServer) Start(_ context.Context) error {
 	logrus.Info("Starting kube-apiserver")
-	args := map[string]string{
+	args := stringmap.StringMap{
 		"advertise-address":                a.ClusterConfig.Spec.API.Address,
 		"secure-port":                      fmt.Sprintf("%d", a.ClusterConfig.Spec.API.Port),
 		"authorization-mode":               "Node,RBAC",
@@ -103,16 +110,16 @@ func (a *APIServer) Run(_ context.Context) error {
 		"requestheader-client-ca-file":     path.Join(a.K0sVars.CertRootDir, "front-proxy-ca.crt"),
 		"service-account-key-file":         path.Join(a.K0sVars.CertRootDir, "sa.pub"),
 		"service-cluster-ip-range":         a.ClusterConfig.Spec.Network.BuildServiceCIDR(a.ClusterConfig.Spec.API.Address),
+		"tls-min-version":                  "VersionTLS12",
 		"tls-cert-file":                    path.Join(a.K0sVars.CertRootDir, "server.crt"),
 		"tls-private-key-file":             path.Join(a.K0sVars.CertRootDir, "server.key"),
 		"service-account-signing-key-file": path.Join(a.K0sVars.CertRootDir, "sa.key"),
 		"service-account-issuer":           "https://kubernetes.default.svc",
 		"service-account-jwks-uri":         "https://kubernetes.default.svc/openid/v1/jwks",
-		"insecure-port":                    "0",
 		"profiling":                        "false",
 		"v":                                a.LogLevel,
 		"kubelet-certificate-authority":    path.Join(a.K0sVars.CertRootDir, "ca.crt"),
-		"enable-admission-plugins":         "NodeRestriction,PodSecurityPolicy",
+		"enable-admission-plugins":         "NodeRestriction",
 	}
 
 	apiAudiences := []string{"https://kubernetes.default.svc"}
@@ -129,21 +136,26 @@ func (a *APIServer) Run(_ context.Context) error {
 	args["api-audiences"] = strings.Join(apiAudiences, ",")
 
 	for name, value := range a.ClusterConfig.Spec.API.ExtraArgs {
-		if args[name] != "" {
+		if _, ok := args[name]; ok {
 			logrus.Warnf("overriding apiserver flag with user provided value: %s", name)
 		}
 		args[name] = value
 	}
-	a.ClusterConfig.Spec.Network.DualStack.EnableDualStackFeatureGate(args)
 
+	args = v1beta1.EnableFeatureGate(args, v1beta1.ServiceInternalTrafficPolicyFeatureGate)
 	for name, value := range apiDefaultArgs {
 		if args[name] == "" {
 			args[name] = value
 		}
 	}
-	if a.ClusterConfig.Spec.API.ExternalAddress != "" {
+	if args["tls-cipher-suites"] == "" {
+		args["tls-cipher-suites"] = constant.AllowedTLS12CipherSuiteNames()
+	}
+
+	if a.DisableEndpointReconciler {
 		args["endpoint-reconciler-type"] = "none"
 	}
+
 	var apiServerArgs []string
 	for name, value := range args {
 		apiServerArgs = append(apiServerArgs, fmt.Sprintf("--%s=%s", name, value))
@@ -158,19 +170,13 @@ func (a *APIServer) Run(_ context.Context) error {
 		UID:     a.uid,
 		GID:     a.gid,
 	}
-	switch a.ClusterConfig.Spec.Storage.Type {
-	case v1beta1.KineStorageType:
-		a.supervisor.Args = append(a.supervisor.Args,
-			fmt.Sprintf("--etcd-servers=unix://%s", a.K0sVars.KineSocketPath)) // kine endpoint
-	case v1beta1.EtcdStorageType:
-		a.supervisor.Args = append(a.supervisor.Args,
-			"--etcd-servers=https://127.0.0.1:2379",
-			fmt.Sprintf("--etcd-cafile=%s", path.Join(a.K0sVars.CertRootDir, "etcd/ca.crt")),
-			fmt.Sprintf("--etcd-certfile=%s", path.Join(a.K0sVars.CertRootDir, "apiserver-etcd-client.crt")),
-			fmt.Sprintf("--etcd-keyfile=%s", path.Join(a.K0sVars.CertRootDir, "apiserver-etcd-client.key")))
-	default:
-		return fmt.Errorf("invalid storage type: %s", a.ClusterConfig.Spec.Storage.Type)
+
+	etcdArgs, err := getEtcdArgs(a.ClusterConfig.Spec.Storage, a.K0sVars)
+	if err != nil {
+		return err
 	}
+	a.supervisor.Args = append(a.supervisor.Args, etcdArgs...)
+
 	return a.supervisor.Supervise()
 }
 
@@ -196,14 +202,8 @@ func (a *APIServer) Stop() error {
 	return a.supervisor.Stop()
 }
 
-// Reconcile detects changes in configuration and applies them to the component
-func (a *APIServer) Reconcile() error {
-	logrus.Debug("reconcile method called for: APIServer")
-	return nil
-}
-
 // Health-check interface
-func (a *APIServer) Healthy() error {
+func (a *APIServer) Ready() error {
 	// Load client cert so the api can authenitcate the request.
 	certFile := path.Join(a.K0sVars.CertRootDir, "admin.crt")
 	keyFile := path.Join(a.K0sVars.CertRootDir, "admin.key")
@@ -240,4 +240,32 @@ func (a *APIServer) Healthy() error {
 		return fmt.Errorf("expected 200 for api server ready check, got %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func getEtcdArgs(storage *v1beta1.StorageSpec, k0sVars constant.CfgVars) ([]string, error) {
+	var args []string
+
+	switch storage.Type {
+	case v1beta1.KineStorageType:
+		sockURL := url.URL{
+			Scheme: "unix", OmitHost: true,
+			Path: filepath.ToSlash(k0sVars.KineSocketPath),
+		} // kine endpoint
+		args = append(args, fmt.Sprintf("--etcd-servers=%s", sockURL.String()))
+	case v1beta1.EtcdStorageType:
+		args = append(args, fmt.Sprintf("--etcd-servers=%s", storage.Etcd.GetEndpointsAsString()))
+		if storage.Etcd.IsTLSEnabled() {
+			args = append(args,
+				fmt.Sprintf("--etcd-cafile=%s", storage.Etcd.GetCaFilePath(k0sVars.EtcdCertDir)),
+				fmt.Sprintf("--etcd-certfile=%s", storage.Etcd.GetCertFilePath(k0sVars.CertRootDir)),
+				fmt.Sprintf("--etcd-keyfile=%s", storage.Etcd.GetKeyFilePath(k0sVars.CertRootDir)))
+		}
+		if storage.Etcd.IsExternalClusterUsed() {
+			args = append(args, fmt.Sprintf("--etcd-prefix=%s", storage.Etcd.ExternalCluster.EtcdPrefix))
+		}
+	default:
+		return nil, fmt.Errorf("invalid storage type: %s", storage.Type)
+	}
+
+	return args, nil
 }

@@ -1,3 +1,19 @@
+/*
+Copyright 2020 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package helm
 
 import (
@@ -5,8 +21,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"gopkg.in/yaml.v2"
+	"github.com/sirupsen/logrus"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -15,6 +32,7 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/repo"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"sigs.k8s.io/yaml"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
@@ -28,10 +46,19 @@ type Commands struct {
 	kubeConfig   string
 }
 
+func logFn(format string, args ...interface{}) {
+	log := logrus.WithField("component", "helm")
+	log.Debugf(format, args...)
+}
+
 var getters = getter.Providers{
 	getter.Provider{
 		Schemes: []string{"http", "https"},
 		New:     getter.NewHTTPGetter,
+	},
+	getter.Provider{
+		Schemes: []string{"oci"},
+		New:     getter.NewOCIGetter,
 	},
 }
 
@@ -56,7 +83,7 @@ func (hc *Commands) getActionCfg(namespace string) (*action.Configuration, error
 		ImpersonateGroup: &impersonateGroup,
 	}
 	actionConfig := &action.Configuration{}
-	if err := actionConfig.Init(cfg, namespace, "secret", func(format string, v ...interface{}) {}); err != nil {
+	if err := actionConfig.Init(cfg, namespace, "secret", logFn); err != nil {
 		return nil, err
 	}
 	return actionConfig, nil
@@ -142,27 +169,12 @@ func (hc *Commands) locateChart(name string, version string) (string, error) {
 	}
 
 	dl := downloader.ChartDownloader{
-		Out:     os.Stdout,
-		Getters: getters,
-		Options: []getter.Option{
-			// getter.WithBasicAuth(c.Username, c.Password),
-			// getter.WithTLSClientConfig(c.CertFile, c.KeyFile, c.CaFile),
-			// getter.WithInsecureSkipVerifyTLS(c.InsecureSkipTLSverify),
-		},
+		Out:              os.Stdout,
+		Getters:          getters,
+		Options:          []getter.Option{},
 		RepositoryConfig: hc.repoFile,
 		RepositoryCache:  hc.helmCacheDir,
 	}
-	//if c.Verify {
-	//	dl.Verify = downloader.VerifyAlways
-	//}
-	//if c.RepoURL != "" {
-	//	chartURL, err := repo.FindChartInAuthAndTLSRepoURL(c.RepoURL, c.Username, c.Password, name, version,
-	//		c.CertFile, c.KeyFile, c.CaFile, c.InsecureSkipTLSverify, getter.All(settings))
-	//	if err != nil {
-	//		return "", err
-	//	}
-	//	name = chartURL
-	//}
 
 	if err := dir.Init(hc.helmCacheDir, constant.DataDirMode); err != nil {
 		return "", fmt.Errorf("can't locate chart `%s-%s`: %v", name, version, err)
@@ -193,25 +205,30 @@ func (hc *Commands) isInstallable(chart *chart.Chart) bool {
 	return true
 }
 
-func (hc *Commands) InstallChart(chartName string, version string, namespace string, values map[string]interface{}) (*release.Release, error) {
+func (hc *Commands) InstallChart(chartName string, version string, releaseName string, namespace string, values map[string]interface{}, timeout time.Duration) (*release.Release, error) {
 	cfg, err := hc.getActionCfg(namespace)
 	if err != nil {
 		return nil, fmt.Errorf("can't create action configuration: %v", err)
 	}
 	install := action.NewInstall(cfg)
 	install.CreateNamespace = true
+	install.WaitForJobs = true
+	install.Wait = true
+	install.Timeout = timeout
 	chartDir, err := hc.locateChart(chartName, version)
 	if err != nil {
 		return nil, err
 	}
 	install.Namespace = namespace
-	install.GenerateName = true
+	install.Atomic = true
+	install.ReleaseName = releaseName
 	name, _, err := install.NameAndChart([]string{chartName})
 	install.ReleaseName = name
 
 	if err != nil {
 		return nil, err
 	}
+
 	loadedChart, err := loader.Load(chartDir)
 	if err != nil {
 		return nil, fmt.Errorf("can't load loadedChart `%s`: %v", chartDir, err)
@@ -228,7 +245,6 @@ func (hc *Commands) InstallChart(chartName string, version string, namespace str
 	if err != nil {
 		return nil, fmt.Errorf("can't reload loadedChart `%s`: %v", chartDir, err)
 	}
-
 	chartRelease, err := install.Run(loadedChart, values)
 	if err != nil {
 		return nil, fmt.Errorf("can't install loadedChart `%s`: %v", loadedChart.Name(), err)
@@ -236,14 +252,19 @@ func (hc *Commands) InstallChart(chartName string, version string, namespace str
 	return chartRelease, nil
 }
 
-func (hc *Commands) UpgradeChart(chartName string, version string, releaseName string, namespace string, values map[string]interface{}) (*release.Release, error) {
+func (hc *Commands) UpgradeChart(chartName string, version string, releaseName string, namespace string, values map[string]interface{}, timeout time.Duration) (*release.Release, error) {
 	cfg, err := hc.getActionCfg(namespace)
 	if err != nil {
 		return nil, fmt.Errorf("can't create action configuration: %v", err)
 	}
 	upgrade := action.NewUpgrade(cfg)
 	upgrade.Namespace = namespace
-
+	upgrade.Wait = true
+	upgrade.WaitForJobs = true
+	upgrade.Install = true
+	upgrade.Force = true
+	upgrade.Atomic = true
+	upgrade.Timeout = timeout
 	chartDir, err := hc.locateChart(chartName, version)
 	if err != nil {
 		return nil, err

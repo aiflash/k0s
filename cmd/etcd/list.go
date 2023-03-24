@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,17 +13,18 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package etcd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
 
 	"github.com/k0sproject/k0s/pkg/config"
 	"github.com/k0sproject/k0s/pkg/etcd"
+
+	"github.com/spf13/cobra"
 )
 
 func etcdListCmd() *cobra.Command {
@@ -31,9 +32,9 @@ func etcdListCmd() *cobra.Command {
 		Use:   "member-list",
 		Short: "Returns etcd cluster members list",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
+			c := config.GetCmdOpts()
 			ctx := context.Background()
-			etcdClient, err := etcd.NewClient(c.K0sVars.CertRootDir, c.K0sVars.EtcdCertDir)
+			etcdClient, err := etcd.NewClient(c.K0sVars.CertRootDir, c.K0sVars.EtcdCertDir, c.NodeConfig.Spec.Storage.Etcd)
 			if err != nil {
 				return fmt.Errorf("can't list etcd cluster members: %v", err)
 			}
@@ -41,12 +42,7 @@ func etcdListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("can't list etcd cluster members: %v", err)
 			}
-			l := logrus.New()
-			l.SetFormatter(&logrus.JSONFormatter{})
-
-			l.WithField("members", members).
-				Info("done")
-			return nil
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]interface{}{"members": members})
 		},
 	}
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())

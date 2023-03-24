@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package install
 
 import (
@@ -32,8 +33,11 @@ func cmdFlagsToArgs(cmd *cobra.Command) []string {
 		val := f.Value.String()
 		switch f.Value.Type() {
 		case "stringSlice", "stringToString":
-			flagsAndVals = append(flagsAndVals, fmt.Sprintf(`--%s="%s"`, f.Name, strings.Trim(val, "[]")))
+			flagsAndVals = append(flagsAndVals, fmt.Sprintf(`--%s=%s`, f.Name, strings.Trim(val, "[]")))
 		default:
+			if f.Name == "env" || f.Name == "force" {
+				return
+			}
 			if f.Name == "data-dir" || f.Name == "token-file" || f.Name == "config" {
 				val, _ = filepath.Abs(val)
 			}

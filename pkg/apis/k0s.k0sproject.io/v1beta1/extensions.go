@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,15 +13,22 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
-import "errors"
+import (
+	"errors"
+	"time"
+
+	"helm.sh/helm/v3/pkg/chartutil"
+)
 
 var _ Validateable = (*ClusterExtensions)(nil)
 
 // ClusterExtensions specifies cluster extensions
 type ClusterExtensions struct {
-	Helm *HelmExtensions `json:"helm"`
+	Storage *StorageExtension `json:"storage"`
+	Helm    *HelmExtensions   `json:"helm"`
 }
 
 // HelmExtensions specifies settings for cluster helm based extensions
@@ -81,17 +88,21 @@ func (he HelmExtensions) Validate() []error {
 
 // Chart single helm addon
 type Chart struct {
-	Name      string `json:"name"`
-	ChartName string `json:"chartname"`
-	Version   string `json:"version"`
-	Values    string `json:"values"`
-	TargetNS  string `json:"namespace"`
+	Name      string        `json:"name"`
+	ChartName string        `json:"chartname"`
+	Version   string        `json:"version"`
+	Values    string        `json:"values"`
+	TargetNS  string        `json:"namespace"`
+	Timeout   time.Duration `json:"timeout"`
 }
 
 // Validate performs validation
 func (c Chart) Validate() error {
 	if c.Name == "" {
 		return errors.New("chart must have Name field not empty")
+	}
+	if err := chartutil.ValidateReleaseName(c.Name); err != nil {
+		return err
 	}
 	if c.ChartName == "" {
 		return errors.New("chart must have ChartName field not empty")
@@ -130,11 +141,23 @@ func (e *ClusterExtensions) Validate() []error {
 	if e == nil {
 		return nil
 	}
+	var errs []error
 	if e.Helm != nil {
-		if err := e.Helm.Validate(); err != nil {
-			return err
-		}
-
+		errs = append(errs, e.Helm.Validate()...)
 	}
-	return nil
+	if e.Storage != nil {
+		errs = append(errs, e.Storage.Validate()...)
+	}
+	return errs
+}
+
+// DefaultExtensions default values
+func DefaultExtensions() *ClusterExtensions {
+	return &ClusterExtensions{
+		Storage: &StorageExtension{
+			Type:                      ExternalStorage,
+			CreateDefaultStorageClass: false,
+		},
+		Helm: &HelmExtensions{},
+	}
 }

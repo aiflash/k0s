@@ -1,7 +1,8 @@
+//go:build windows
 // +build windows
 
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +16,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package constant
 
 import "fmt"
@@ -36,6 +38,7 @@ const (
 	KineSocket                     = "kine\\kine.sock:2379"
 	KubePauseContainerImage        = "mcr.microsoft.com/oss/kubernetes/pause"
 	KubePauseContainerImageVersion = "1.4.1"
+	K0sConfigPathDefault           = "C:\\etc\\k0s\\k0s.yaml"
 )
 
 func formatPath(dir string, file string) string {

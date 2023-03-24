@@ -2,7 +2,7 @@
 
 k0s comes with the option to enable dynamic configuration for cluster level components. This covers all the components other than etcd (or sqlite) and the Kubernetes api-server. This option enables k0s configuration directly via Kubernetes API as opposed to using a configuration file for all cluster configuration.
 
-This feature has to be separately enabled for all controllers using `k0s controller --enable-dynamic-config`.
+This feature has to be enabled for every controller in the cluster using the `--enable-dynamic-config` flag in `k0s controller` or `k0s install controller` commands. Having both types of controllers in the same cluster will cause a conflict.
 
 ## Dynamic vs. static configuration
 
@@ -24,7 +24,7 @@ In case of HA control plane, all the controllers will need this part of the conf
 The cluster wide configuration is stored in the Kubernetes API as a custom resource called `clusterconfig`. There's currently only one instance named `k0s`. You can edit the configuration with what ever means possible, for example with:
 
 ```shell
-kubectl -n kube-system edit clusterconfig k0s
+k0s config edit
 ```
 
 This will open the configuration object for editing in your system's default editor.
@@ -53,10 +53,13 @@ As with any Kubernetes cluster there are certain things that just cannot be chan
 
 ## Configuration status
 
-The dynamic configuration reconciler operator will write status events for all the changes it detects. To see all related events you can query the events where the source object is this k0s config object:
+The dynamic configuration reconciler operator will write status events for all the changes it detects. To see all dynamic config related events, use:
 
 ```shell
-bash-5.1# k0s kc -n kube-system get event --field-selector involvedObject.name=k0s
+k0s config status
+```
+
+```shell
 LAST SEEN   TYPE      REASON                OBJECT              MESSAGE
 64s         Warning   FailedReconciling     clusterconfig/k0s   failed to validate config: [invalid pod CIDR invalid ip address]
 59s         Normal    SuccessfulReconcile   clusterconfig/k0s   Succesfully reconciler cluster config

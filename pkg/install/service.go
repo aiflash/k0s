@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s Authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,11 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package install
 
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/kardianos/service"
 	"github.com/sirupsen/logrus"
@@ -65,7 +67,7 @@ func InstalledService() (service.Service, error) {
 }
 
 // EnsureService installs the k0s service, per the given arguments, and the detected platform
-func EnsureService(args []string) error {
+func EnsureService(args []string, envVars []string, force bool) error {
 	var deps []string
 	var svcConfig *service.Config
 
@@ -85,8 +87,24 @@ func EnsureService(args []string) error {
 	// fetch service type
 	svcType := s.Platform()
 	switch svcType {
+	case "darwin-launchd":
+		svcConfig.Option = map[string]interface{}{
+			"EnvironmentMap": prepareEnvVars(envVars),
+			"LaunchdConfig":  launchdConfig,
+		}
 	case "linux-openrc":
 		deps = []string{"need net", "use dns", "after firewall"}
+		svcConfig.Option = map[string]interface{}{
+			"OpenRCScript": openRCScript,
+		}
+	case "linux-upstart":
+		svcConfig.Option = map[string]interface{}{
+			"UpstartScript": upstartScript,
+		}
+	case "unix-systemv":
+		svcConfig.Option = map[string]interface{}{
+			"SystemdScript": sysvScript,
+		}
 	case "linux-systemd":
 		deps = []string{"After=network-online.target", "Wants=network-online.target"}
 		svcConfig.Option = map[string]interface{}{
@@ -96,10 +114,20 @@ func EnsureService(args []string) error {
 	default:
 	}
 
+	if len(envVars) > 0 {
+		svcConfig.Option["Environment"] = envVars
+	}
+
 	svcConfig.Dependencies = deps
 	svcConfig.Arguments = args
-
-	logrus.Info("Installing k0s service")
+	if force {
+		logrus.Infof("Uninstalling %s service", svcConfig.Name)
+		err = s.Uninstall()
+		if err != nil && err != service.ErrNotInstalled {
+			logrus.Warnf("failed to uninstall service: %v", err)
+		}
+	}
+	logrus.Infof("Installing %s service", svcConfig.Name)
 	err = s.Install()
 	if err != nil {
 		return fmt.Errorf("failed to install service: %v", err)
@@ -168,6 +196,19 @@ func GetServiceConfig(role string) *service.Config {
 	}
 }
 
+func prepareEnvVars(envVars []string) map[string]string {
+	result := make(map[string]string)
+	for _, envVar := range envVars {
+		parts := strings.SplitN(envVar, "=", 1)
+		if len(parts) != 2 {
+			continue
+		}
+
+		result[parts[0]] = parts[1]
+	}
+	return result
+}
+
 // Upstream kardianos/service does not support all the options we want to set to the systemd unit, hence we override the template
 // Currently mostly for KillMode=process so we get systemd to only send the sigterm to the main process
 const systemdScript = `[Unit]
@@ -181,6 +222,8 @@ ConditionFileIsExecutable={{.Path|cmdEscape}}
 StartLimitInterval=5
 StartLimitBurst=10
 ExecStart={{.Path|cmdEscape}}{{range .Arguments}} {{.|cmdEscape}}{{end}}
+{{- if .Option.Environment}}{{range .Option.Environment}}
+Environment="{{.}}"{{end}}{{- end}}
 
 RestartSec=120
 Delegate=yes

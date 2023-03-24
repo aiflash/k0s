@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -24,18 +25,16 @@ import (
 	"github.com/k0sproject/k0s/pkg/apis/helm.k0sproject.io/v1beta1"
 	config "github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
-	"gopkg.in/yaml.v2"
+	"sigs.k8s.io/yaml"
 
 	"github.com/stretchr/testify/require"
 )
 
-var k0sVars = constant.GetConfig("")
-
 func Test_KubeletConfig(t *testing.T) {
+	k0sVars := constant.GetConfig(t.TempDir())
 	dnsAddr, _ := cfg.Spec.Network.DNSAddress()
 	t.Run("default_profile_only", func(t *testing.T) {
-		k, err := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory())
-		require.NoError(t, err)
+		k := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory())
 
 		t.Log("starting to run...")
 		buf, err := k.createProfiles(cfg)
@@ -46,8 +45,8 @@ func Test_KubeletConfig(t *testing.T) {
 		manifestYamls := strings.Split(strings.TrimSuffix(buf.String(), "---"), "---")[1:]
 		t.Run("output_must_have_3_manifests", func(t *testing.T) {
 			require.Len(t, manifestYamls, 4, "Must have exactly 4 generated manifests per profile")
-			requireConfigMap(t, manifestYamls[0], "kubelet-config-default-1.22")
-			requireConfigMap(t, manifestYamls[1], "kubelet-config-default-windows-1.22")
+			requireConfigMap(t, manifestYamls[0], "kubelet-config-default-1.26")
+			requireConfigMap(t, manifestYamls[1], "kubelet-config-default-windows-1.26")
 			requireRole(t, manifestYamls[2], []string{
 				formatProfileName("default"),
 				formatProfileName("default-windows"),
@@ -55,11 +54,11 @@ func Test_KubeletConfig(t *testing.T) {
 			requireRoleBinding(t, manifestYamls[3])
 		})
 	})
-	t.Run("default_profile_must_have_feature_gates_if_dualstack_setup", func(t *testing.T) {
-		profile := getDefaultProfile(dnsAddr, true)
-		require.Equal(t, map[string]bool{
-			"IPv6DualStack": true,
-		}, profile["featureGates"])
+	t.Run("default_profile_must_pass_down_cluster_domain", func(t *testing.T) {
+		profile := getDefaultProfile(dnsAddr, "cluster.local.custom")
+		require.Equal(t, string(
+			"cluster.local.custom",
+		), profile["clusterDomain"])
 	})
 	t.Run("with_user_provided_profiles", func(t *testing.T) {
 		k := defaultConfigWithUserProvidedProfiles(t)
@@ -73,7 +72,7 @@ func Test_KubeletConfig(t *testing.T) {
 			// check that each profile has config map, role and role binding
 			var resourceNamesForRole []string
 			for idx, profileName := range []string{"default", "default-windows", "profile_XXX", "profile_YYY"} {
-				fullName := "kubelet-config-" + profileName + "-1.22"
+				fullName := "kubelet-config-" + profileName + "-1.26"
 				resourceNamesForRole = append(resourceNamesForRole, formatProfileName(profileName))
 				requireConfigMap(t, manifestYamls[idx], fullName)
 			}
@@ -92,13 +91,21 @@ func Test_KubeletConfig(t *testing.T) {
 			require.NoError(t, yaml.Unmarshal([]byte(manifestYamls[3]), &profileYYY))
 
 			// manually apple the same changes to default config and check that there is no diff
-			defaultProfileKubeletConfig := getDefaultProfile(dnsAddr, false)
-			defaultProfileKubeletConfig["authentication"].(map[string]interface{})["anonymous"].(map[string]interface{})["enabled"] = false
+			defaultProfileKubeletConfig := getDefaultProfile(dnsAddr, "cluster.local")
+			defaultProfileKubeletConfig["authentication"] = map[string]interface{}{
+				"anonymous": map[string]interface{}{
+					"enabled": false,
+				},
+			}
 			defaultWithChangesXXX, err := yaml.Marshal(defaultProfileKubeletConfig)
 			require.NoError(t, err)
 
-			defaultProfileKubeletConfig = getDefaultProfile(dnsAddr, false)
-			defaultProfileKubeletConfig["authentication"].(map[string]interface{})["webhook"].(map[string]interface{})["cacheTTL"] = "15s"
+			defaultProfileKubeletConfig = getDefaultProfile(dnsAddr, "cluster.local")
+			defaultProfileKubeletConfig["authentication"] = map[string]interface{}{
+				"webhook": map[string]interface{}{
+					"cacheTTL": "15s",
+				},
+			}
 			defaultWithChangesYYY, err := yaml.Marshal(defaultProfileKubeletConfig)
 
 			require.NoError(t, err)
@@ -110,8 +117,8 @@ func Test_KubeletConfig(t *testing.T) {
 }
 
 func defaultConfigWithUserProvidedProfiles(t *testing.T) *KubeletConfig {
-	k, err := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory())
-	require.NoError(t, err)
+	k0sVars := constant.GetConfig(t.TempDir())
+	k := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory())
 
 	cfgProfileX := map[string]interface{}{
 		"authentication": map[string]interface{}{

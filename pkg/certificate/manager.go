@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,14 +13,17 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package certificate
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -34,6 +37,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/k0sproject/k0s/internal/pkg/file"
+	"github.com/k0sproject/k0s/internal/pkg/stringslice"
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/constant"
 )
@@ -81,12 +85,12 @@ func (m *Manager) EnsureCA(name, cn string) error {
 		return err
 	}
 
-	err = os.WriteFile(keyFile, key, constant.CertSecureMode)
+	err = file.WriteContentAtomically(keyFile, key, constant.CertSecureMode)
 	if err != nil {
 		return err
 	}
 
-	err = os.WriteFile(certFile, cert, constant.CertMode)
+	err = file.WriteContentAtomically(certFile, cert, constant.CertMode)
 	if err != nil {
 		return err
 	}
@@ -115,7 +119,7 @@ func (m *Manager) EnsureCertificate(certReq Request, ownerName string) (Certific
 
 		req.KeyRequest.A = "rsa"
 		req.KeyRequest.S = 2048
-		req.Hosts = certReq.Hostnames
+		req.Hosts = stringslice.Unique(certReq.Hostnames)
 
 		var key, csrBytes []byte
 		g := &csr.Generator{Validator: genkey.Validator}
@@ -124,8 +128,8 @@ func (m *Manager) EnsureCertificate(certReq Request, ownerName string) (Certific
 			return Certificate{}, err
 		}
 		config := cli.Config{
-			CAFile:    certReq.CACert,
-			CAKeyFile: certReq.CAKey,
+			CAFile:    fmt.Sprintf("file:%s", certReq.CACert),
+			CAKeyFile: fmt.Sprintf("file:%s", certReq.CAKey),
 		}
 		s, err := sign.SignerFromConfig(config)
 		if err != nil {
@@ -146,11 +150,11 @@ func (m *Manager) EnsureCertificate(certReq Request, ownerName string) (Certific
 			Key:  string(key),
 			Cert: string(cert),
 		}
-		err = os.WriteFile(keyFile, key, constant.CertSecureMode)
+		err = file.WriteContentAtomically(keyFile, key, constant.CertSecureMode)
 		if err != nil {
 			return Certificate{}, err
 		}
-		err = os.WriteFile(certFile, cert, constant.CertMode)
+		err = file.WriteContentAtomically(certFile, cert, constant.CertMode)
 		if err != nil {
 			return Certificate{}, err
 		}
@@ -241,48 +245,39 @@ func (m *Manager) CreateKeyPair(name string, k0sVars constant.CfgVars, owner str
 		return err
 	}
 
-	var privateKey = &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
+	err = file.WriteAtomically(keyFile, constant.CertSecureMode, func(unbuffered io.Writer) error {
+		privateKey := pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(key),
+		}
 
-	outFile, err := os.OpenFile(keyFile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, constant.CertSecureMode)
-	if err != nil {
-		return err
-	}
-	defer outFile.Close()
+		w := bufio.NewWriter(unbuffered)
+		if err := pem.Encode(w, &privateKey); err != nil {
+			return err
+		}
+		return w.Flush()
+	})
 
-	err = file.Chown(keyFile, owner, constant.CertSecureMode)
-	if err != nil {
-		return err
-	}
-
-	err = pem.Encode(outFile, privateKey)
 	if err != nil {
 		return err
 	}
 
-	// note to the next reader: key.Public() != key.PublicKey
-	pubBytes, err := x509.MarshalPKIXPublicKey(key.Public())
-	if err != nil {
-		return err
-	}
+	return file.WriteAtomically(pubFile, 0644, func(unbuffered io.Writer) error {
+		// note to the next reader: key.Public() != key.PublicKey
+		pubBytes, err := x509.MarshalPKIXPublicKey(key.Public())
+		if err != nil {
+			return err
+		}
 
-	var pemkey = &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: pubBytes,
-	}
+		pemKey := pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: pubBytes,
+		}
 
-	pemfile, err := os.Create(pubFile)
-	if err != nil {
-		return err
-	}
-	defer pemfile.Close()
-
-	err = pem.Encode(pemfile, pemkey)
-	if err != nil {
-		return err
-	}
-
-	return nil
+		w := bufio.NewWriter(unbuffered)
+		if err := pem.Encode(w, &pemKey); err != nil {
+			return err
+		}
+		return w.Flush()
+	})
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -21,25 +22,30 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/k0sproject/k0s/internal/pkg/flags"
 	"github.com/k0sproject/k0s/internal/pkg/stringmap"
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
 
 // Manager implement the component interface to run kube scheduler
 type Manager struct {
-	gid            int
-	K0sVars        constant.CfgVars
-	LogLevel       string
+	K0sVars               constant.CfgVars
+	LogLevel              string
+	SingleNode            bool
+	ServiceClusterIPRange string
+	ExtraArgs             string
+
 	supervisor     *supervisor.Supervisor
-	uid            int
+	uid, gid       int
 	previousConfig stringmap.StringMap
 }
 
@@ -53,11 +59,11 @@ var cmDefaultArgs = stringmap.StringMap{
 	"use-service-account-credentials": "true",
 }
 
-var _ component.Component = &Manager{}
-var _ component.ReconcilerComponent = &Manager{}
+var _ manager.Component = (*Manager)(nil)
+var _ manager.Reconciler = (*Manager)(nil)
 
 // Init extracts the needed binaries
-func (a *Manager) Init() error {
+func (a *Manager) Init(_ context.Context) error {
 	var err error
 	// controller manager running as api-server user as they both need access to same sa.key
 	a.uid, err = users.GetUID(constant.ApiserverUser)
@@ -74,7 +80,7 @@ func (a *Manager) Init() error {
 }
 
 // Run runs kube Manager
-func (a *Manager) Run(_ context.Context) error { return nil }
+func (a *Manager) Start(_ context.Context) error { return nil }
 
 // Reconcile detects changes in configuration and applies them to the component
 func (a *Manager) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterConfig) error {
@@ -92,32 +98,37 @@ func (a *Manager) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterCon
 		"root-ca-file":                     path.Join(a.K0sVars.CertRootDir, "ca.crt"),
 		"service-account-private-key-file": path.Join(a.K0sVars.CertRootDir, "sa.key"),
 		"cluster-cidr":                     clusterConfig.Spec.Network.BuildPodCIDR(),
-		"service-cluster-ip-range":         clusterConfig.Spec.Network.BuildServiceCIDR(clusterConfig.Spec.API.Address),
+		"service-cluster-ip-range":         a.ServiceClusterIPRange,
 		"profiling":                        "false",
 		"terminated-pod-gc-threshold":      "12500",
 		"v":                                a.LogLevel,
 	}
 
-	for name, value := range clusterConfig.Spec.ControllerManager.ExtraArgs {
-		if args[name] != "" {
-			logger.Warnf("overriding kube-controller-manager flag with user provided value: %s", name)
-		}
-		args[name] = value
+	// Handle the extra args as last so they can be used to overrride some k0s "hardcodings"
+	if a.ExtraArgs != "" {
+		// This service uses args without hyphens, so enforce that.
+		extras := flags.Split(strings.ReplaceAll(a.ExtraArgs, "--", ""))
+		args.Merge(extras)
 	}
+
 	if clusterConfig.Spec.Network.DualStack.Enabled {
 		args["node-cidr-mask-size-ipv6"] = "110"
 		args["node-cidr-mask-size-ipv4"] = "24"
 	} else {
 		args["node-cidr-mask-size"] = "24"
 	}
-	clusterConfig.Spec.Network.DualStack.EnableDualStackFeatureGate(args)
+	for name, value := range clusterConfig.Spec.ControllerManager.ExtraArgs {
+		if _, ok := args[name]; ok {
+			logger.Warnf("overriding kube-controller-manager flag with user provided value: %s", name)
+		}
+		args[name] = value
+	}
 	for name, value := range cmDefaultArgs {
 		if args[name] == "" {
 			args[name] = value
 		}
 	}
-
-	if clusterConfig.Spec.API.ExternalAddress == "" {
+	if a.SingleNode {
 		args["leader-elect"] = "false"
 	}
 
@@ -156,6 +167,3 @@ func (a *Manager) Stop() error {
 	}
 	return nil
 }
-
-// Health-check interface
-func (a *Manager) Healthy() error { return nil }

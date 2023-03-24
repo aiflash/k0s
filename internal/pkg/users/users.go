@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,29 +13,29 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package users
 
 import (
+	"errors"
+	"os/exec"
 	"os/user"
 	"strconv"
+	"strings"
 )
 
 // GetUID returns uid of given username and logs a warning if its missing
 func GetUID(name string) (int, error) {
 	entry, err := user.Lookup(name)
-	if err != nil {
-		return 0, err
+	if err == nil {
+		return strconv.Atoi(entry.Uid)
 	}
-	return strconv.Atoi(entry.Uid)
-}
-
-func CheckIfUserExists(name string) (bool, error) {
-	_, err := user.Lookup(name)
-	if _, ok := err.(user.UnknownUserError); ok {
-		return false, nil
+	if errors.Is(err, user.UnknownUserError(name)) {
+		// fallback to call external `id` in case NSS is used
+		out, err := exec.Command("/usr/bin/id", "-u", name).CombinedOutput()
+		if err == nil {
+			return strconv.Atoi(strings.TrimSuffix(string(out), "\n"))
+		}
 	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return 0, err
 }

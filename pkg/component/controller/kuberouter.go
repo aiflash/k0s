@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -22,52 +23,75 @@ import (
 
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
-	"github.com/pkg/errors"
+
 	"github.com/sirupsen/logrus"
 )
 
 // KubeRouter implements the kube-router reconciler component
 type KubeRouter struct {
-	log *logrus.Entry
+	log logrus.FieldLogger
 
-	saver          manifestsSaver
+	saver   manifestsSaver
+	k0sVars constant.CfgVars
+
 	previousConfig kubeRouterConfig
-	k0sVars        constant.CfgVars
 }
 
-var _ component.Component = &KubeRouter{}
-var _ component.ReconcilerComponent = &KubeRouter{}
+var _ manager.Component = (*KubeRouter)(nil)
+var _ manager.Reconciler = (*KubeRouter)(nil)
 
 type kubeRouterConfig struct {
 	MTU               int
 	AutoMTU           bool
+	MetricsPort       int
 	CNIInstallerImage string
 	CNIImage          string
+	GlobalHairpin     bool
+	CNIHairpin        bool
+	IPMasq            bool
 	PeerRouterIPs     string
 	PeerRouterASNs    string
 	PullPolicy        string
 }
 
 // NewKubeRouter creates new KubeRouter reconciler component
-func NewKubeRouter(k0sVars constant.CfgVars, manifestsSaver manifestsSaver) (*KubeRouter, error) {
-	log := logrus.WithFields(logrus.Fields{"component": "kube-router"})
+func NewKubeRouter(k0sVars constant.CfgVars, manifestsSaver manifestsSaver) *KubeRouter {
 	return &KubeRouter{
+		log: logrus.WithFields(logrus.Fields{"component": "kube-router"}),
+
 		saver:   manifestsSaver,
-		log:     log,
 		k0sVars: k0sVars,
-	}, nil
+	}
 }
 
 // Init does nothing
-func (k *KubeRouter) Init() error { return nil }
-
-// Healthy is a no-op check
-func (k *KubeRouter) Healthy() error { return nil }
+func (k *KubeRouter) Init(_ context.Context) error { return nil }
 
 // Stop no-op as nothing running
 func (k *KubeRouter) Stop() error { return nil }
+
+func getHairpinConfig(cfg *kubeRouterConfig, krc *v1beta1.KubeRouter) {
+	// Configure hairpin
+	switch krc.Hairpin {
+	case v1beta1.HairpinUndefined:
+		// If Hairpin is undefined, then we honor HairpinMode
+		if krc.HairpinMode {
+			cfg.CNIHairpin = true
+			cfg.GlobalHairpin = true
+		}
+	case v1beta1.HairpinDisabled:
+		cfg.CNIHairpin = false
+		cfg.GlobalHairpin = false
+	case v1beta1.HairpinAllowed:
+		cfg.CNIHairpin = true
+		cfg.GlobalHairpin = false
+	case v1beta1.HairpinEnabled:
+		cfg.CNIHairpin = true
+		cfg.GlobalHairpin = true
+	}
+}
 
 // Reconcile detects changes in configuration and applies them to the component
 func (k *KubeRouter) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterConfig) error {
@@ -84,12 +108,15 @@ func (k *KubeRouter) Reconcile(_ context.Context, clusterConfig *v1beta1.Cluster
 	cfg := kubeRouterConfig{
 		AutoMTU:           clusterConfig.Spec.Network.KubeRouter.AutoMTU,
 		MTU:               clusterConfig.Spec.Network.KubeRouter.MTU,
+		MetricsPort:       clusterConfig.Spec.Network.KubeRouter.MetricsPort,
 		PeerRouterIPs:     clusterConfig.Spec.Network.KubeRouter.PeerRouterIPs,
 		PeerRouterASNs:    clusterConfig.Spec.Network.KubeRouter.PeerRouterASNs,
+		IPMasq:            clusterConfig.Spec.Network.KubeRouter.IPMasq,
 		CNIImage:          clusterConfig.Spec.Images.KubeRouter.CNI.URI(),
 		CNIInstallerImage: clusterConfig.Spec.Images.KubeRouter.CNIInstaller.URI(),
 		PullPolicy:        clusterConfig.Spec.Images.DefaultPullPolicy,
 	}
+	getHairpinConfig(&cfg, clusterConfig.Spec.Network.KubeRouter)
 
 	if cfg == k.previousConfig {
 		k.log.Info("config matches with previous, not reconciling anything")
@@ -105,18 +132,18 @@ func (k *KubeRouter) Reconcile(_ context.Context, clusterConfig *v1beta1.Cluster
 
 	err := tw.WriteToBuffer(output)
 	if err != nil {
-		return errors.Wrap(err, "error writing kube-router manifests, will NOT retry")
+		return fmt.Errorf("error writing kube-router manifests, will NOT retry: %w", err)
 	}
 
 	err = k.saver.Save("kube-router.yaml", output.Bytes())
 	if err != nil {
-		return errors.Wrap(err, "error writing kube-router manifests, will NOT retry")
+		return fmt.Errorf("error writing kube-router manifests, will NOT retry: %w", err)
 	}
 	return nil
 }
 
 // Run runs the kube-router reconciler
-func (k *KubeRouter) Run(_ context.Context) error {
+func (k *KubeRouter) Start(_ context.Context) error {
 	k.log.Info("starting to dump manifests")
 
 	return nil
@@ -143,9 +170,10 @@ data:
              {{- if not .AutoMTU }}
              "mtu": {{ .MTU }},
              {{- end }}
-             "auto-mtu": {{ .AutoMTU }},
              "bridge":"kube-bridge",
              "isDefaultGateway":true,
+             "hairpinMode": {{ .CNIHairpin }},
+             "ipMasq": {{ .IPMasq }},
              "ipam":{
                 "type":"host-local"
              }
@@ -178,9 +206,11 @@ spec:
       labels:
         k8s-app: kube-router
         tier: node
+      {{- if gt .MetricsPort 0 }}
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
+        prometheus.io/port: "{{ .MetricsPort }}"
+      {{- end }}
     spec:
       priorityClassName: system-node-critical
       serviceAccountName: kube-router
@@ -221,6 +251,9 @@ spec:
         operator: Exists
       - effect: NoExecute
         operator: Exists
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
       volumes:
       - name: lib-modules
         hostPath:
@@ -248,7 +281,11 @@ spec:
         - "--run-firewall=true"
         - "--run-service-proxy=false"
         - "--bgp-graceful-restart=true"
-        - "--metrics-port=8080"
+        - "--metrics-port={{ .MetricsPort }}"
+        - "--hairpin-mode={{ .GlobalHairpin }}"
+        {{- if not .AutoMTU }}
+        - "--auto-mtu=false"
+        {{- end }}
         {{- if .PeerRouterIPs }}
         - "--peer-router-ips={{ .PeerRouterIPs }}"
         {{- end }}

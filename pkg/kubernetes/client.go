@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kubernetes
 
 import (
@@ -36,6 +37,8 @@ type ClientFactoryInterface interface {
 	GetDynamicClient() (dynamic.Interface, error)
 	GetDiscoveryClient() (discovery.CachedDiscoveryInterface, error)
 	GetConfigClient() (cfgClient.ClusterConfigInterface, error)
+	GetRESTClient() (rest.Interface, error)
+	GetRESTConfig() *rest.Config
 }
 
 // NewAdminClientFactory creates a new factory that loads the admin kubeconfig based client
@@ -67,14 +70,14 @@ func (c *ClientFactory) GetClient() (kubernetes.Interface, error) {
 
 	if c.restConfig == nil {
 		c.restConfig, err = clientcmd.BuildConfigFromFlags("", c.configPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+		}
 		// We're always running the client on the same host as the API, no need to compress
 		c.restConfig.DisableCompression = true
 		// To mitigate stack applier bursts in startup
 		c.restConfig.QPS = 40.0
 		c.restConfig.Burst = 400.0
-		if err != nil {
-			return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-		}
 	}
 
 	if c.client != nil {
@@ -97,14 +100,14 @@ func (c *ClientFactory) GetDynamicClient() (dynamic.Interface, error) {
 	var err error
 	if c.restConfig == nil {
 		c.restConfig, err = clientcmd.BuildConfigFromFlags("", c.configPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+		}
 		// We're always running the client on the same host as the API, no need to compress
 		c.restConfig.DisableCompression = true
 		// To mitigate stack applier bursts in startup
 		c.restConfig.QPS = 40.0
 		c.restConfig.Burst = 400.0
-		if err != nil {
-			return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-		}
 	}
 
 	if c.dynamicClient != nil {
@@ -168,19 +171,47 @@ func (c *ClientFactory) GetConfigClient() (cfgClient.ClusterConfigInterface, err
 	return c.configClient, nil
 }
 
-// NewClient creates new k8s client based of the given kubeconfig
-// This should be only used in cases where the client is "short-running" and shouldn't/cannot use the common "cached" one.
-func NewClient(kubeconfig string) (kubernetes.Interface, error) {
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+func (c *ClientFactory) GetRESTClient() (rest.Interface, error) {
+	cs, ok := c.client.(*kubernetes.Clientset)
+	if !ok {
+		return nil, fmt.Errorf("error converting interface")
+	}
+	return cs.RESTClient(), nil
+}
+
+func (c *ClientFactory) GetRESTConfig() *rest.Config {
+	return c.restConfig
+}
+
+// KubeconfigFromFile returns a [clientcmd.KubeconfigGetter] that tries to load
+// a kubeconfig from the given path.
+func KubeconfigFromFile(path string) clientcmd.KubeconfigGetter {
+	return (&clientcmd.ClientConfigLoadingRules{ExplicitPath: path}).Load
+}
+
+// NewClientFromFile creates a new Kubernetes client based of the given
+// kubeconfig file.
+func NewClientFromFile(kubeconfig string) (kubernetes.Interface, error) {
+	return NewClient(KubeconfigFromFile(kubeconfig))
+}
+
+func ClientConfig(getter clientcmd.KubeconfigGetter) (*rest.Config, error) {
+	kubeconfig, err := getter()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+		return nil, err
 	}
 
-	clientset, err := kubernetes.NewForConfig(config)
+	return clientcmd.NewNonInteractiveClientConfig(*kubeconfig, "", nil, nil).ClientConfig()
+}
+
+// NewClient creates new k8s client based of the given kubeconfig getter. This
+// should be only used in cases where the client is "short-running" and
+// shouldn't/cannot use the common "cached" one.
+func NewClient(getter clientcmd.KubeconfigGetter) (kubernetes.Interface, error) {
+	config, err := ClientConfig(getter)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create k8s client: %w", err)
+		return nil, err
 	}
 
-	return clientset, nil
+	return kubernetes.NewForConfig(config)
 }

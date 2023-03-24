@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package etcd
 
 import (
@@ -21,33 +22,29 @@ import (
 
 	"github.com/k0sproject/k0s/pkg/config"
 	"github.com/k0sproject/k0s/pkg/etcd"
+
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
-var etcdPeerAddress string
-
 func etcdLeaveCmd() *cobra.Command {
+	var etcdPeerAddress string
+
 	cmd := &cobra.Command{
 		Use:   "leave",
 		Short: "Sign off a given etc node from etcd cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
-			cfg, err := config.GetNodeConfig(c.CfgFile, c.K0sVars)
-			if err != nil {
-				return err
-			}
-			c.ClusterConfig = cfg
+			c := config.GetCmdOpts()
 			ctx := context.Background()
 			if etcdPeerAddress == "" {
-				etcdPeerAddress = c.ClusterConfig.Spec.Storage.Etcd.PeerAddress
+				etcdPeerAddress = c.NodeConfig.Spec.Storage.Etcd.PeerAddress
 			}
 			if etcdPeerAddress == "" {
 				return fmt.Errorf("can't leave etcd cluster: peer address is empty, check the config file or use cli argument")
 			}
 
 			peerURL := fmt.Sprintf("https://%s:2380", etcdPeerAddress)
-			etcdClient, err := etcd.NewClient(c.K0sVars.CertRootDir, c.K0sVars.EtcdCertDir)
+			etcdClient, err := etcd.NewClient(c.K0sVars.CertRootDir, c.K0sVars.EtcdCertDir, c.NodeConfig.Spec.Storage.Etcd)
 			if err != nil {
 				return fmt.Errorf("can't connect to the etcd: %v", err)
 			}

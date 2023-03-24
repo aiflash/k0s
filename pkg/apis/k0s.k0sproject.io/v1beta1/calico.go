@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import "encoding/json"
@@ -21,6 +22,9 @@ import "encoding/json"
 type Calico struct {
 	// Enable wireguard-based encryption (default: false)
 	EnableWireguard bool `json:"wireguard"`
+
+	// Environment variables to configure Calico node (see https://docs.projectcalico.org/reference/node/configuration)
+	EnvVars map[string]string `json:"envVars,omitempty"`
 
 	// The host path for Calicos flex-volume-driver(default: /usr/libexec/k0s/kubelet-plugins/volume/exec/nodeagent~uds)
 	FlexVolumeDriverPath string `json:"flexVolumeDriverPath"`
@@ -81,9 +85,5 @@ func (c *Calico) UnmarshalJSON(data []byte) error {
 
 	type calico Calico
 	jc := (*calico)(c)
-	if err := json.Unmarshal(data, jc); err != nil {
-		return err
-	}
-
-	return nil
+	return json.Unmarshal(data, jc)
 }

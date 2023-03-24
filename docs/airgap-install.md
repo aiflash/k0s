@@ -18,6 +18,8 @@ k0s/containerd uses OCI (Open Container Initiative) bundles for airgap installat
 
 k0s offers two methods for creating OCI bundles, one using Docker and the other using a previously set up k0s worker. Be aware, though, that you cannot use the Docker method for the ARM architectures due to [kube-proxy image multiarch manifest problem](https://github.com/kubernetes/kubernetes/issues/98229).
 
+**Note:** k0s strictly matches image architecture, e.g. arm/v7 images won't work for arm64.
+
 ### Docker
 
 1. Pull the images.
@@ -57,34 +59,45 @@ Copy the `bundle_file` you created in the previous step or downloaded from the [
 
 As an alternative to the previous step, you can use k0sctl to upload the bundle file to the worker nodes. k0sctl can also be used to upload k0s binary file to all nodes. Take a look at this example (k0sctl.yaml) with one controller and one worker node to upload the bundle file and k0s binary:
 
-```YAML
+```yaml
 apiVersion: k0sctl.k0sproject.io/v1beta1
-kind: Cluster
+kind: ClusterConfig
 metadata:
   name: k0s-cluster
 spec:
-  hosts:
-  - ssh:
-      address: <ip-address-controller>
-      user: ubuntu
-      keyPath: /path/.ssh/id_rsa
-    role: controller
-    uploadBinary: true
-    k0sBinaryPath: /path/to/k0s_binary/k0s
-  - ssh:
-      address: <ip-address-worker>
-      user: ubuntu
-      keyPath: /path/.ssh/id_rsa
-    role: worker
-    uploadBinary: true
-    k0sBinaryPath: /path/to/k0s_binary/k0s
-    files:
-      - name: bundle-file
-        src: /path/to/bundle-file/airgap-bundle-amd64.tar
-        dstDir: /var/lib/k0s/images/
-        perm: 0755
   k0s:
-    version: 1.21.3+k0s.0
+    version: {{{ extra.k8s_version }}}+k0s.0
+  hosts:
+    - role: controller
+      ssh:
+        address: <controller-ip-address>
+        user: ubuntu
+        keyPath: /path/.ssh/id_rsa
+
+      #  uploadBinary: <boolean>
+      #    When true the k0s binaries are cached and uploaded
+      #    from the host running k0sctl instead of downloading
+      #    directly to the target host.
+      uploadBinary: true
+
+      #  k0sBinaryPath: <local filepath>
+      #    Upload a custom or manually downloaded k0s binary
+      #    from a local path on the host running k0sctl to the
+      #    target host.
+      # k0sBinaryPath: path/to/k0s_binary/k0s
+
+    - role: worker
+      ssh:
+        address: <worker-ip-address>
+        user: ubuntu
+        keyPath: /path/.ssh/id_rsa
+      uploadBinary: true
+      files:
+        # This airgap bundle file will be uploaded from the k0sctl
+        # host to the specified directory on the target host
+        - src: /local/path/to/bundle-file/airgap-bundle-amd64.tar
+          dstDir: /var/lib/k0s/images/
+          perm: 0755
 ```
 
 ## 3. Ensure pull policy in the k0s.yaml (optional)
@@ -93,7 +106,7 @@ Use the following `k0s.yaml` to ensure that containerd does not pull images for 
 
 ```yaml
 apiVersion: k0s.k0sproject.io/v1beta1
-kind: Cluster
+kind: ClusterConfig
 metadata:
   name: k0s
 spec:

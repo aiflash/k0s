@@ -21,56 +21,51 @@ package backup
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/pkg/backup"
+	"github.com/k0sproject/k0s/pkg/component/status"
 	"github.com/k0sproject/k0s/pkg/config"
-	"github.com/k0sproject/k0s/pkg/install"
+
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
-type CmdOpts config.CLIOptions
-
-var savePath string
+type command config.CLIOptions
 
 func NewBackupCmd() *cobra.Command {
+	var savePath string
+
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Back-Up k0s configuration. Must be run as root (or with sudo)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
-			cfg, err := config.GetYamlFromFile(c.CfgFile, c.K0sVars)
-			if err != nil {
-				return err
+			c := command(config.GetCmdOpts())
+			if c.NodeConfig.Spec.Storage.Etcd.IsExternalClusterUsed() {
+				return fmt.Errorf("command 'k0s backup' does not support external etcd cluster")
 			}
-			c.ClusterConfig = cfg
-			return c.backup()
+			return c.backup(savePath, cmd.OutOrStdout())
 		},
-		PreRunE: preRunValidateConfig,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			c := command(config.GetCmdOpts())
+			return config.PreRunValidateConfig(c.K0sVars)
+		},
 	}
-	cmd.Flags().StringVar(&savePath, "save-path", "", "destination directory path for backup assets")
+	cmd.Flags().StringVar(&savePath, "save-path", "", "destination directory path for backup assets, use '-' for stdout")
 	cmd.SilenceUsage = true
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
 	return cmd
 }
 
-func (c *CmdOpts) backup() error {
-	logger := logrus.New()
-	textFormatter := new(logrus.TextFormatter)
-	textFormatter.ForceColors = true
-	textFormatter.DisableTimestamp = true
-
-	logger.SetFormatter(textFormatter)
-
+func (c *command) backup(savePath string, out io.Writer) error {
 	if os.Geteuid() != 0 {
-		logger.Fatal("this command must be run as root!")
+		logrus.Fatal("this command must be run as root!")
 	}
 
-	if !dir.IsDirectory(savePath) {
+	if savePath != "-" && !dir.IsDirectory(savePath) {
 		return fmt.Errorf("the save-path directory (%v) does not exist", savePath)
 	}
 
@@ -78,7 +73,7 @@ func (c *CmdOpts) backup() error {
 		return fmt.Errorf("cannot find data-dir (%v). check your environment and/or command input and try again", c.K0sVars.DataDir)
 	}
 
-	status, err := install.GetStatusInfo(config.StatusSocket)
+	status, err := status.GetStatusInfo(config.StatusSocket)
 	if err != nil {
 		return fmt.Errorf("unable to detect cluster status %s", err)
 	}
@@ -89,16 +84,7 @@ func (c *CmdOpts) backup() error {
 		if err != nil {
 			return err
 		}
-		return mgr.RunBackup(c.CfgFile, c.ClusterConfig.Spec, c.K0sVars, savePath)
+		return mgr.RunBackup(c.NodeConfig.Spec, c.K0sVars, savePath, out)
 	}
 	return fmt.Errorf("backup command must be run on the controller node, have `%s`", status.Role)
-}
-
-func preRunValidateConfig(cmd *cobra.Command, args []string) error {
-	c := CmdOpts(config.GetCmdOpts())
-	_, err := config.ValidateYaml(c.CfgFile, c.K0sVars)
-	if err != nil {
-		return err
-	}
-	return nil
 }

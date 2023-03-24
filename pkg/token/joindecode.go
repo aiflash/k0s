@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package token
 
 import (
@@ -20,6 +21,8 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"io"
+
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // DecodeJoinToken decodes an token string that is encoded with JoinEncode
@@ -45,4 +48,12 @@ func DecodeJoinToken(token string) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func GetTokenType(clientCfg *clientcmdapi.Config) string {
+	for _, kubeContext := range clientCfg.Contexts {
+		return kubeContext.AuthInfo
+	}
+
+	return ""
 }

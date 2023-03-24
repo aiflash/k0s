@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kubeconfig
 
 import (
@@ -23,18 +24,13 @@ import (
 	"os"
 	"path"
 
-	"github.com/cloudflare/cfssl/log"
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-
 	"github.com/k0sproject/k0s/pkg/certificate"
 	"github.com/k0sproject/k0s/pkg/config"
+
+	"github.com/spf13/cobra"
 )
 
-var (
-	groups string
-
-	userKubeconfigTemplate = template.Must(template.New("kubeconfig").Parse(`
+var userKubeconfigTemplate = template.Must(template.New("kubeconfig").Parse(`
 apiVersion: v1
 clusters:
 - cluster:
@@ -55,33 +51,29 @@ users:
     client-certificate-data: {{.ClientCert}}
     client-key-data: {{.ClientKey}}
 `))
-)
 
 func kubeconfigCreateCmd() *cobra.Command {
+	var groups string
+
 	cmd := &cobra.Command{
-		Use:   "create [username]",
+		Use:   "create username",
 		Short: "Create a kubeconfig for a user",
 		Long: `Create a kubeconfig with a signed certificate and public key for a given user (and optionally user groups)
 Note: A certificate once signed cannot be revoked for a particular user`,
 		Example: `	Command to create a kubeconfig for a user:
 	CLI argument:
-	$ k0s kubeconfig create [username]
+	$ k0s kubeconfig create username
 
 	optionally add groups:
-	$ k0s kubeconfig create [username] --groups [groups]`,
+	$ k0s kubeconfig create username --groups [groups]`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// disable cfssl log
-			log.Level = log.LevelFatal
-
 			if len(args) == 0 {
 				return fmt.Errorf("username is mandatory")
 			}
 			username := args[0]
-			c := CmdOpts(config.GetCmdOpts())
-			clusterAPIURL, err := c.getAPIURL()
-			if err != nil {
-				return fmt.Errorf("failed to fetch cluster's API Address: %w", err)
-			}
+			c := config.GetCmdOpts()
+			clusterAPIURL := c.NodeConfig.Spec.API.APIAddressURL()
+
 			caCert, err := os.ReadFile(path.Join(c.K0sVars.CertRootDir, "ca.crt"))
 			if err != nil {
 				return fmt.Errorf("failed to read cluster ca certificate: %w, check if the control plane is initialized on this node", err)
@@ -122,7 +114,7 @@ Note: A certificate once signed cannot be revoked for a particular user`,
 			if err != nil {
 				return err
 			}
-			_, err = os.Stdout.Write(buf.Bytes())
+			_, err = cmd.OutOrStdout().Write(buf.Bytes())
 			if err != nil {
 				return err
 			}
@@ -132,15 +124,4 @@ Note: A certificate once signed cannot be revoked for a particular user`,
 	cmd.Flags().StringVar(&groups, "groups", "", "Specify groups")
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
 	return cmd
-}
-
-func (c *CmdOpts) getAPIURL() (string, error) {
-	// Disable logrus
-	logrus.SetLevel(logrus.FatalLevel)
-
-	cfg, err := config.GetNodeConfig(c.CfgFile, c.K0sVars)
-	if err != nil {
-		return "", err
-	}
-	return cfg.Spec.API.APIAddressURL(), nil
 }

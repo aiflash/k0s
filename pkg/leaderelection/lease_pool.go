@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,14 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package leaderelection
 
 import (
 	"context"
 	"time"
 
-	"github.com/cloudflare/cfssl/log"
-	"github.com/k0sproject/k0s/internal/pkg/machineid"
+	"github.com/k0sproject/k0s/internal/pkg/sysinfo/machineid"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -49,7 +49,7 @@ type LeaseConfiguration struct {
 	duration      time.Duration
 	renewDeadline time.Duration
 	retryPeriod   time.Duration
-	log           *logrus.Entry
+	log           logrus.FieldLogger
 	ctx           context.Context
 }
 
@@ -81,7 +81,10 @@ func WithRetryPeriod(retryPeriod time.Duration) LeaseOpt {
 }
 
 // WithLogger allows the consumer to pass a different logrus entry with additional context
-func WithLogger(logger *logrus.Entry) LeaseOpt {
+func WithLogger(logger logrus.FieldLogger) LeaseOpt {
+	if logger == nil {
+		logger = logrus.StandardLogger()
+	}
 	return func(config LeaseConfiguration) LeaseConfiguration {
 		config.log = logger
 		return config
@@ -113,14 +116,14 @@ func WithNamespace(namespace string) LeaseOpt {
 }
 
 // NewLeasePool creates a new LeasePool struct to interact with a lease
-func NewLeasePool(client kubernetes.Interface, name string, opts ...LeaseOpt) (*LeasePool, error) {
+func NewLeasePool(ctx context.Context, client kubernetes.Interface, name string, opts ...LeaseOpt) (*LeasePool, error) {
 
 	leaseConfig := LeaseConfiguration{
-		log:           logrus.NewEntry(logrus.New()),
+		log:           logrus.StandardLogger(),
 		duration:      60 * time.Second,
 		renewDeadline: 15 * time.Second,
 		retryPeriod:   5 * time.Second,
-		ctx:           context.TODO(),
+		ctx:           ctx,
 		namespace:     "kube-node-lease",
 		name:          name,
 	}
@@ -133,7 +136,7 @@ func NewLeasePool(client kubernetes.Interface, name string, opts ...LeaseOpt) (*
 			return nil, err
 		}
 
-		leaseConfig.identity = machineID
+		leaseConfig.identity = machineID.ID()
 	}
 
 	for _, opt := range opts {
@@ -199,11 +202,11 @@ func (p *LeasePool) Watch(opts ...WatchOpt) (*LeaseEvents, context.CancelFunc, e
 		RetryPeriod:     p.config.retryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
-				log.Info("acquired leader lease")
+				p.config.log.Info("Acquired leader lease")
 				p.events.AcquiredLease <- struct{}{}
 			},
 			OnStoppedLeading: func() {
-				log.Info("lost leader lease")
+				p.config.log.Info("Lost leader lease")
 				p.events.LostLease <- struct{}{}
 			},
 			OnNewLeader: nil,
@@ -218,7 +221,12 @@ func (p *LeasePool) Watch(opts ...WatchOpt) (*LeaseEvents, context.CancelFunc, e
 	}
 
 	ctx, cancel := context.WithCancel(p.config.ctx)
-	go le.Run(ctx)
+
+	go func() {
+		for ctx.Err() == nil {
+			le.Run(ctx)
+		}
+	}()
 
 	return p.events, cancel, nil
 }

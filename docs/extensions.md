@@ -26,6 +26,19 @@ helm:
         emptyDir:
           medium: Memory
     namespace: default
+  # We don't need to specify the repo in the repositories section for OCI charts
+  - name: oci-chart
+    chartname: oci://registry:8080/chart
+    version: "0.0.1"
+    values: ""
+    namespace: default
+  # Other way is to use local tgz file with chart
+  # the file must exist all controller nodes
+  - name: tgz-chart
+    chartname: /tmp/chart.tgz
+    version: "0.0.1"
+    values: ""
+    namespace: default
 ```
 
 By using the configuration above, the cluster would:

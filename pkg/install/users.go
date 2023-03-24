@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s Authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package install
 
 import (
@@ -55,7 +56,7 @@ func DeleteControllerUsers(clusterConfig *v1beta1.ClusterConfig) error {
 	cfgUsers := getUserList(*clusterConfig.Spec.Install.SystemUsers)
 	var messages []string
 	for _, v := range cfgUsers {
-		if exists, _ := users.CheckIfUserExists(v); exists {
+		if _, err := users.GetUID(v); err == nil {
 			logrus.Debugf("deleting user: %s", v)
 
 			if err := deleteUser(v); err != nil {
@@ -73,22 +74,11 @@ func DeleteControllerUsers(clusterConfig *v1beta1.ClusterConfig) error {
 // EnsureUser checks if a user exists, and creates it, if it doesn't
 // TODO: we should also consider modifying the user, if the user exists, but with wrong settings
 func EnsureUser(name string, homeDir string) error {
-	exists, err := users.CheckIfUserExists(name)
-	if err != nil {
-		return err
+	_, err := users.GetUID(name)
+	if errors.Is(err, user.UnknownUserError(name)) {
+		logrus.Infof("creating user: %s", name)
+		return createUser(name, homeDir)
 	}
-
-	if exists {
-		return nil
-	}
-
-	logrus.Infof("creating user: %s", name)
-	if err := createUser(name, homeDir); err != nil {
-		return err
-	}
-
-	// verify that user can be fetched, and exists
-	_, err = user.Lookup(name)
 	return err
 }
 

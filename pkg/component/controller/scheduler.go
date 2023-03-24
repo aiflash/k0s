@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -26,7 +27,7 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
@@ -36,16 +37,17 @@ type Scheduler struct {
 	gid            int
 	K0sVars        constant.CfgVars
 	LogLevel       string
+	SingleNode     bool
 	supervisor     *supervisor.Supervisor
 	uid            int
 	previousConfig stringmap.StringMap
 }
 
-var _ component.Component = &Scheduler{}
-var _ component.ReconcilerComponent = &Scheduler{}
+var _ manager.Component = (*Scheduler)(nil)
+var _ manager.Reconciler = (*Scheduler)(nil)
 
 // Init extracts the needed binaries
-func (a *Scheduler) Init() error {
+func (a *Scheduler) Init(_ context.Context) error {
 	var err error
 	a.uid, err = users.GetUID(constant.SchedulerUser)
 	if err != nil {
@@ -55,7 +57,7 @@ func (a *Scheduler) Init() error {
 }
 
 // Run runs kube scheduler
-func (a *Scheduler) Run(_ context.Context) error {
+func (a *Scheduler) Start(_ context.Context) error {
 	return nil
 }
 
@@ -83,13 +85,12 @@ func (a *Scheduler) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterC
 		"v":                         a.LogLevel,
 	}
 	for name, value := range clusterConfig.Spec.Scheduler.ExtraArgs {
-		if args[name] != "" {
+		if _, ok := args[name]; ok {
 			logrus.Warnf("overriding kube-scheduler flag with user provided value: %s", name)
 		}
 		args[name] = value
 	}
-
-	if clusterConfig.Spec.API.ExternalAddress == "" {
+	if a.SingleNode {
 		args["leader-elect"] = "false"
 	}
 
@@ -120,6 +121,3 @@ func (a *Scheduler) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterC
 	a.previousConfig = args
 	return a.supervisor.Supervise()
 }
-
-// Health-check interface
-func (a *Scheduler) Healthy() error { return nil }

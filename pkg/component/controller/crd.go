@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,36 +20,34 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/static"
 )
 
-var _ component.Component = &CRD{}
+var _ manager.Component = (*CRD)(nil)
 
 // CRD unpacks bundled CRD definitions to the filesystem
 type CRD struct {
-	saver manifestsSaver
+	saver   manifestsSaver
+	bundles []string
 }
 
 // NewCRD build new CRD
-func NewCRD(s manifestsSaver) *CRD {
+func NewCRD(s manifestsSaver, bundles []string) *CRD {
 	return &CRD{
-		saver: s,
+		saver:   s,
+		bundles: bundles,
 	}
 }
 
-var bundles = []string{
-	"helm",
-}
-
-// Init  (c CRD) Init() error {
-func (c CRD) Init() error {
+// Init  (c CRD) Init(_ context.Context) error {
+func (c CRD) Init(_ context.Context) error {
 	return nil
 }
 
 // Run unpacks manifests from bindata
-func (c CRD) Run(_ context.Context) error {
-	for _, bundle := range bundles {
+func (c CRD) Start(_ context.Context) error {
+	for _, bundle := range c.bundles {
 		crds, err := static.AssetDir(fmt.Sprintf("manifests/%s/CustomResourceDefinition", bundle))
 		if err != nil {
 			return fmt.Errorf("can't unbundle CRD `%s` manifests: %v", bundle, err)
@@ -72,9 +70,5 @@ func (c CRD) Run(_ context.Context) error {
 }
 
 func (c CRD) Stop() error {
-	return nil
-}
-
-func (c CRD) Healthy() error {
 	return nil
 }

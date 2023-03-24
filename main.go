@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2022 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,29 +13,32 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package main
 
 import (
 	_ "net/http/pprof"
 	"os"
+	"path"
+	"strings"
 
 	"github.com/k0sproject/k0s/cmd"
-	"github.com/sirupsen/logrus"
+	k0slog "github.com/k0sproject/k0s/internal/pkg/log"
 )
 
-//go:generate make generate-bindata
+//go:generate make codegen
 
 func init() {
-
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
-
-	customFormatter := new(logrus.TextFormatter)
-	customFormatter.TimestampFormat = "2006-01-02 15:04:05"
-	customFormatter.FullTimestamp = true
-	logrus.SetFormatter(customFormatter)
+	k0slog.InitLogging()
 }
 
 func main() {
+	// Make embedded commands work through symlinks such as /usr/local/bin/kubectl (or k0s-kubectl)
+	progN := strings.TrimPrefix(path.Base(os.Args[0]), "k0s-")
+	switch progN {
+	case "kubectl", "ctr":
+		os.Args = append([]string{"k0s", progN}, os.Args[1:]...)
+	}
+
 	cmd.Execute()
 }

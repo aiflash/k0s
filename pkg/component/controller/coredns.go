@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -23,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,11 +62,12 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
+  - discovery.k8s.io
   resources:
-  - nodes
+  - endpointslices
   verbs:
-  - get
+  - list
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -129,6 +131,9 @@ spec:
     metadata:
       labels:
         k8s-app: kube-dns
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '9153'
     spec:
       serviceAccountName: coredns
       tolerations:
@@ -138,16 +143,17 @@ spec:
           operator: "Exists"
           effect: "NoSchedule"
       nodeSelector:
-        beta.kubernetes.io/os: linux
-      # Prefer running coredns replicas on different nodes
+        kubernetes.io/os: linux
+      # Require running coredns replicas on different nodes
       affinity:
-        preferredDuringSchedulingIgnoredDuringExecution:
-          topologyKey: "kubernetes.io/hostname"
-          labelSelector:
-            matchExpressions:
-            - key: k8s-app
-              operator: In
-              values: ['kube-dns']
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: "kubernetes.io/hostname"
+            labelSelector:
+              matchExpressions:
+              - key: k8s-app
+                operator: In
+                values: ['kube-dns']
       containers:
       - name: coredns
         image: {{ .Image }}
@@ -240,15 +246,17 @@ spec:
 
 const HostsPerExtraReplica = 10.0
 
-var _ component.Component = &CoreDNS{}
-var _ component.ReconcilerComponent = &CoreDNS{}
+var _ manager.Component = (*CoreDNS)(nil)
+var _ manager.Reconciler = (*CoreDNS)(nil)
 
 // CoreDNS is the component implementation to manage CoreDNS
 type CoreDNS struct {
+	K0sVars    constant.CfgVars
+	NodeConfig *v1beta1.ClusterConfig
+
 	client                 kubernetes.Interface
 	log                    *logrus.Entry
 	manifestDir            string
-	K0sVars                constant.CfgVars
 	previousConfig         coreDNSConfig
 	stopFunc               context.CancelFunc
 	lastKnownClusterConfig *v1beta1.ClusterConfig
@@ -263,7 +271,7 @@ type coreDNSConfig struct {
 }
 
 // NewCoreDNS creates new instance of CoreDNS component
-func NewCoreDNS(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface) (*CoreDNS, error) {
+func NewCoreDNS(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface, nodeConfig *v1beta1.ClusterConfig) (*CoreDNS, error) {
 	manifestDir := path.Join(k0sVars.ManifestsDir, "coredns")
 
 	client, err := clientFactory.GetClient()
@@ -276,16 +284,17 @@ func NewCoreDNS(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInt
 		log:         log,
 		K0sVars:     k0sVars,
 		manifestDir: manifestDir,
+		NodeConfig:  nodeConfig,
 	}, nil
 }
 
 // Init does nothing
-func (c *CoreDNS) Init() error {
+func (c *CoreDNS) Init(_ context.Context) error {
 	return dir.Init(c.manifestDir, constant.ManifestsDirMode)
 }
 
 // Run runs the CoreDNS reconciler component
-func (c *CoreDNS) Run(ctx context.Context) error {
+func (c *CoreDNS) Start(ctx context.Context) error {
 	ctx, c.stopFunc = context.WithCancel(ctx)
 
 	go func() {
@@ -313,7 +322,7 @@ func (c *CoreDNS) Run(ctx context.Context) error {
 }
 
 func (c *CoreDNS) getConfig(ctx context.Context, clusterConfig *v1beta1.ClusterConfig) (coreDNSConfig, error) {
-	dns, err := clusterConfig.Spec.Network.DNSAddress()
+	dns, err := c.NodeConfig.Spec.Network.DNSAddress()
 	if err != nil {
 		return coreDNSConfig{}, err
 	}
@@ -328,7 +337,7 @@ func (c *CoreDNS) getConfig(ctx context.Context, clusterConfig *v1beta1.ClusterC
 
 	config := coreDNSConfig{
 		Replicas:      replicas,
-		ClusterDomain: "cluster.local",
+		ClusterDomain: clusterConfig.Spec.Network.ClusterDomain,
 		ClusterDNSIP:  dns,
 		Image:         clusterConfig.Spec.Images.CoreDNS.URI(),
 		PullPolicy:    clusterConfig.Spec.Images.DefaultPullPolicy,
@@ -381,6 +390,3 @@ func (c *CoreDNS) Reconcile(ctx context.Context, clusterConfig *v1beta1.ClusterC
 	c.lastKnownClusterConfig = clusterConfig
 	return nil
 }
-
-// Health-check interface
-func (c *CoreDNS) Healthy() error { return nil }

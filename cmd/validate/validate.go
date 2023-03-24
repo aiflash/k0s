@@ -1,5 +1,5 @@
 /*
-Copyright 2021 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,41 +13,31 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package validate
 
 import (
-	"github.com/k0sproject/k0s/pkg/config"
+	configcmd "github.com/k0sproject/k0s/cmd/config"
+
 	"github.com/spf13/cobra"
 )
 
-type CmdOpts config.CLIOptions
-
+// TODO deprecated, remove when appropriate
 func NewValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "validate",
-		Short: "Validation related sub-commands",
+		Use:    "validate",
+		Short:  "Validation related sub-commands",
+		Hidden: true,
 	}
-	cmd.AddCommand(validateConfigCmd())
+	cmd.AddCommand(newConfigCmd())
 	cmd.SilenceUsage = true
 	return cmd
 }
 
-func validateConfigCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "config",
-		Short: "Validate k0s configuration",
-		Long: `Example:
-   k0s validate config --config path_to_config.yaml`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
-			_, err := config.GetNodeConfig(c.CfgFile, c.K0sVars)
-			return err
-		},
-		SilenceUsage:  true,
-		SilenceErrors: true,
-	}
-
-	// append flags
-	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
+func newConfigCmd() *cobra.Command {
+	cmd := configcmd.NewValidateCmd()
+	cmd.Use = "config"
+	cmd.Deprecated = "use 'k0s config validate' instead"
+	cmd.Hidden = false
 	return cmd
 }

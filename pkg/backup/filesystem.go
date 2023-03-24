@@ -1,6 +1,22 @@
 //go:build !windows
 // +build !windows
 
+/*
+Copyright 2021 k0s authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package backup
 
 import (
@@ -26,7 +42,7 @@ func (d FileSystemStep) Name() string {
 func (d FileSystemStep) Backup() (StepResult, error) {
 	s, err := os.Stat(d.path)
 	if os.IsNotExist(err) {
-		logrus.Infof("Path `%s` does not exist, skipping...", d.path)
+		logrus.Debugf("Path `%s` does not exist, skipping...", d.path)
 		return StepResult{}, nil
 	}
 	if err != nil {
@@ -58,12 +74,12 @@ func (d FileSystemStep) Restore(restoreFrom, restoreTo string) error {
 	objectPathInRestored := path.Join(restoreTo, childName)
 	stat, err := os.Stat(objectPathInArchive)
 	if os.IsNotExist(err) {
-		logrus.Infof("Path `%s` not found in the archive, skipping...", objectPathInArchive)
+		logrus.Debugf("Path `%s` not found in the archive, skipping...", objectPathInArchive)
 		return nil
 	}
-	logrus.Infof("restoring from `%s` to `%s`", objectPathInArchive, objectPathInRestored)
+	logrus.Infof("restoring from `%s` to `%s`", objectPathInArchive, restoreTo)
 	if stat.IsDir() {
-		return dir.Copy(objectPathInArchive, objectPathInRestored)
+		return dir.Copy(objectPathInArchive, restoreTo)
 	}
 	return file.Copy(objectPathInArchive, objectPathInRestored)
 }
