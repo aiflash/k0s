@@ -18,7 +18,7 @@
       
       
       <link rel="icon" href="../../img/k0s_social.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.42">
     
     
       
@@ -26,7 +26,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.0253249f.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
@@ -1808,6 +1808,26 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../adopters/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Adopters
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
     
     
     
@@ -1816,10 +1836,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
         
           
-          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -1830,8 +1850,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_11">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
             <span class="md-nav__icon md-icon"></span>
             Contributing
           </label>
@@ -1983,6 +2003,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#example-configurations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Configurations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#secrets-layout" class="md-nav__link">
     <span class="md-ellipsis">
       Secrets Layout
@@ -2047,8 +2076,8 @@ from registries. Currently, Autopilot's capabilities are limited to downloading
 artifacts via the HTTP[S] protocols.</p>
 <p>Enhancing Autopilot to pull artifacts directly from registries will streamline
 workflows and improve efficiency by allowing integration and deployment of
-diverse artifacts without relying solely on HTTP[S] endpoints. This update will
-enable Autopilot to handle registry-specific protocols and authentication
+diverse artifacts without relying solely on HTTP[S] endpoints. This update
+will enable Autopilot to handle registry-specific protocols and authentication
 mechanisms, aligning it with modern deployment practices.</p>
 <p>Currently, Autopilot does not support the retrieval of artifacts via the HTTP
 protocol when authentication is required. Implementing this feature to
@@ -2061,56 +2090,61 @@ authentication to ensure secure access to artifacts.</p>
 <h2 id="solution">Solution<a class="headerlink" href="#solution" title="Permanent link">#</a></h2>
 <p>Starting with the current <code>PlanResourceURL</code> struct:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">PlanResourceURL</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="c1">// URL is the URL of a downloadable resource.</span>
-<span class="w">        </span><span class="nx">URL</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;url&quot;`</span>
+<span class="w">    </span><span class="c1">// URL is the URL of a downloadable resource.</span>
+<span class="w">    </span><span class="nx">URL</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;url&quot;`</span>
 
-<span class="w">        </span><span class="c1">// Sha256 provides an optional SHA256 hash of the URL&#39;s content for</span>
-<span class="w">        </span><span class="c1">// verification.</span>
-<span class="w">        </span><span class="nx">Sha256</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;sha256,omitempty&quot;`</span>
+<span class="w">    </span><span class="c1">// Sha256 provides an optional SHA256 hash of the URL&#39;s content for</span>
+<span class="w">    </span><span class="c1">// verification.</span>
+<span class="w">    </span><span class="nx">Sha256</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;sha256,omitempty&quot;`</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>We must specify to Autopilot where to access credentials for remote artifact
 pulls. This will be achieved by adjusting the struct as follows:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">PlanResourceURL</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="c1">// URL is the URL of a downloadable resource.</span>
-<span class="w">        </span><span class="nx">URL</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;url&quot;`</span>
+<span class="w">    </span><span class="c1">// URL is the URL of a downloadable resource.</span>
+<span class="w">    </span><span class="nx">URL</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;url&quot;`</span>
 
-<span class="w">        </span><span class="c1">// Sha256 provides an optional SHA256 hash of the URL&#39;s content for</span>
-<span class="w">        </span><span class="c1">// verification.</span>
-<span class="w">        </span><span class="nx">Sha256</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;sha256,omitempty&quot;`</span>
+<span class="w">    </span><span class="c1">// Sha256 provides an optional SHA256 hash of the URL&#39;s content for</span>
+<span class="w">    </span><span class="c1">// verification.</span>
+<span class="w">    </span><span class="nx">Sha256</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;sha256,omitempty&quot;`</span>
 
-<span class="w">        </span><span class="c1">// SecretRef holds a reference to a secret where the credentials are</span>
-<span class="w">        </span><span class="c1">// stored. We use these credentials when pulling the artifacts from the</span>
-<span class="w">        </span><span class="c1">// provided URL using</span>
-<span class="w">        </span><span class="c1">// any of the supported protocols (http, https, and oci).</span>
-<span class="w">        </span><span class="nx">SecretRef</span><span class="w"> </span><span class="o">*</span><span class="nx">corev1</span><span class="p">.</span><span class="nx">SecretReference</span><span class="w"> </span><span class="s">`json:&quot;secretRef,omitempty&quot;`</span>
+<span class="w">    </span><span class="c1">// SecretRef holds a reference to a secret where the credentials are</span>
+<span class="w">    </span><span class="c1">// stored. We use these credentials when pulling the artifacts from the</span>
+<span class="w">    </span><span class="c1">// provided URL using</span>
+<span class="w">    </span><span class="c1">// any of the supported protocols (http, https, and oci).</span>
+<span class="w">    </span><span class="nx">SecretRef</span><span class="w"> </span><span class="o">*</span><span class="nx">corev1</span><span class="p">.</span><span class="nx">SecretReference</span><span class="w"> </span><span class="s">`json:&quot;secretRef,omitempty&quot;`</span>
 
-<span class="w">        </span><span class="c1">// InsecureSkipTLSVerify indicates whether certificates in the remote</span>
-<span class="w">        </span><span class="c1">// URL (if using TLS) can be ignored.</span>
-<span class="w">        </span><span class="nx">InsecureSkipTLSVerify</span><span class="w"> </span><span class="kt">bool</span><span class="w">  </span><span class="s">`json:&quot;insecureSkipTLSVerify,omitempty&quot;`</span>
+<span class="w">    </span><span class="c1">// InsecureSkipTLSVerify indicates whether certificates in the remote</span>
+<span class="w">    </span><span class="c1">// URL (if using TLS) can be ignored.</span>
+<span class="w">    </span><span class="nx">InsecureSkipTLSVerify</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;insecureSkipTLSVerify,omitempty&quot;`</span>
 <span class="p">}</span>
 </code></pre></div>
 <p><code>SecretRef</code> property is of type <code>SecretReference</code> as defined by
 <code>k8s.io/api/core/v1</code> package. The secret pointed by the provided <code>SecretRef</code>
-will be used for pulling artifacts using either HTTP[S] or OCI protocols and is
-expected to by of type <code>kubernetes.io/dockerconfigjson</code> if the protocol in use
-is <code>oci://</code> or of type <code>Opaque</code> if protocols <code>http://</code> or <code>https://</code> are used
-(see below for details on the Secret layout).</p>
-<p>Example configuration for OCI:</p>
+will be used for pulling artifacts using either HTTP[S] or OCI protocols.</p>
+<h3 id="example-configurations">Example Configurations<a class="headerlink" href="#example-configurations" title="Permanent link">#</a></h3>
+<h4 id="configuration-for-oci">Configuration for OCI<a class="headerlink" href="#configuration-for-oci" title="Permanent link">#</a></h4>
 <div class="highlight"><pre><span></span><code><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">oci://my.registry/binaries/k0s:v1.30.1+k0s.0</span>
 <span class="nt">sha256</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e95603f167cce6e3cffef5594ef06785b3c1c00d3e27d8e4fc33824fe6c38a99</span>
 <span class="nt">secretRef</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kube-system</span>
 <span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">artifacts-registry</span>
 </code></pre></div>
-<p>Example configuration for HTTPS:</p>
+<h4 id="configuration-for-oci-using-plain-http-transport">Configuration for OCI using plain HTTP transport<a class="headerlink" href="#configuration-for-oci-using-plain-http-transport" title="Permanent link">#</a></h4>
+<div class="highlight"><pre><span></span><code><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">oci+http://my.registry/binaries/k0s:v1.30.1+k0s.0</span>
+<span class="nt">sha256</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e95603f167cce6e3cffef5594ef06785b3c1c00d3e27d8e4fc33824fe6c38a99</span>
+<span class="nt">secretRef</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kube-system</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">artifacts-registry</span>
+</code></pre></div>
+<h4 id="configuration-for-https">Configuration for HTTPS<a class="headerlink" href="#configuration-for-https" title="Permanent link">#</a></h4>
 <div class="highlight"><pre><span></span><code><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://my.file.server/binaries/k0s-v1.30.1+k0s.0</span>
 <span class="nt">sha256</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e95603f167cce6e3cffef5594ef06785b3c1c00d3e27d8e4fc33824fe6c38a99</span>
 <span class="nt">secretRef</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kube-system</span>
 <span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">artifacts-basic-auth</span>
 </code></pre></div>
-<p>Example configuration for HTTP:</p>
+<h4 id="configuration-for-http">Configuration for HTTP<a class="headerlink" href="#configuration-for-http" title="Permanent link">#</a></h4>
 <div class="highlight"><pre><span></span><code><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://my.file.server/binaries/k0s-v1.30.1+k0s.0</span>
 <span class="nt">sha256</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">e95603f167cce6e3cffef5594ef06785b3c1c00d3e27d8e4fc33824fe6c38a99</span>
 <span class="nt">secretRef</span><span class="p">:</span>
@@ -2118,30 +2152,28 @@ is <code>oci://</code> or of type <code>Opaque</code> if protocols <code>http://
 <span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">artifacts-token-based-auth</span>
 </code></pre></div>
 <h3 id="secrets-layout">Secrets Layout<a class="headerlink" href="#secrets-layout" title="Permanent link">#</a></h3>
-<p>For secrets of type <code>kubernetes.io/dockerconfigjson</code> the format is the default
-for Docker authentications, equal to what is used in a Pod's pull secret. For
-further details you can refer to the <a href="https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/">official
-documentation</a>.</p>
-<p>When it comes to the <code>Opaque</code> secret layout (used for HTTP requests) Autopilot
-will accept the following entries:</p>
+<p>The following standard Kubernetes secret types are supported:</p>
 <ul>
-<li><code>username</code> and <code>password</code>: if both are set then Autopilot will attempt to
-  pull the artifacts using <a href="https://www.ibm.com/docs/en/cics-ts/6.1?topic=concepts-http-basic-authentication">Basic
-  Authentication</a>.</li>
-<li><code>authorization</code>: if this property is set then the <code>Authorization</code>
-  <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Authorization">header</a>
-  will be set to its value when pulling the artifacts.</li>
+<li><a href="https://kubernetes.io/docs/concepts/configuration/secret/#basic-authentication-secret"><code>kubernetes.io/basic-auth</code></a><br>
+  The username and password are used according to the protocol's standard
+  procedure for password-based authentication.</li>
 </ul>
-<p>No other property will be parsed and used. For sake of defining the expected
-behaviour in case of conflicting configurations:</p>
-<blockquote>
-<p>In the case where the three properties are set (<code>username</code>, <code>password</code>, and
-<code>authorization</code>) Autopilot will ignore <code>username</code> and <code>password</code>, i.e.
-<code>authorization</code>  takes precedence over username and password.</p>
-</blockquote>
-<p>The <code>authorization</code> entry is used as is, its content is placed directly into
-the <code>Authorization</code> header. For example a secret like the following will make
-Autopilot to set the <code>Authorization</code> header to <code>Bearer abc123def456ghi789jkl0</code>:</p>
+<ul>
+<li><a href="https://kubernetes.io/docs/concepts/configuration/secret/#docker-config-secrets"><code>kubernetes.io/dockerconfigjson</code></a><br>
+   It works in the same way as a Pod's <a href="https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/">image pull secret</a>. Only supported for
+  the <code>oci://</code> protocol. (Might be supported for other protocols in the future,
+  as well).</li>
+</ul>
+<p>Potentially supported in the future:</p>
+<ul>
+<li><a href="https://kubernetes.io/docs/concepts/configuration/secret/#tls-secrets"><code>kubernetes.io/tls</code></a><br>
+  For TLS client authentication.</li>
+</ul>
+<p>Moreover, k0s supports the following custom secret type:</p>
+<ul>
+<li>
+<p><code>k0sproject.io/http-authorization-header</code><br>
+  Sets a custom value for the HTTP Authorization header:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
 <span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Secret</span>
 <span class="nt">metadata</span><span class="p">:</span>
@@ -2150,12 +2182,18 @@ Autopilot to set the <code>Authorization</code> header to <code>Bearer abc123def
 <span class="nt">data</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">authorization</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Bearer</span><span class="nv"> </span><span class="s">abc123def456ghi789jkl0&quot;</span>
 </code></pre></div>
+<p>The <code>authorization</code> entry is used as is, with its content placed directly into
+the <code>Authorization</code> header. A secret like the above will make Autopilot set
+the <code>Authorization</code> header to <code>Bearer abc123def456ghi789jkl0</code>.</p>
+</li>
+</ul>
 <h3 id="additional-details">Additional Details<a class="headerlink" href="#additional-details" title="Permanent link">#</a></h3>
 <ul>
-<li>The <code>InsecureSkipTLSVerify</code> property is equivalent of defining
+<li>The <code>InsecureSkipTLSVerify</code> property is equivalent to defining
   <code>InsecureSkipTLSVerify</code> on a Go HTTP client.</li>
 <li>The <code>InsecureSkipTLSVerify</code> property will be valid for both <code>oci://</code> and
-  <code>https://</code> protocols.</li>
+  <code>https://</code> protocols. It has no effect for the <code>oci+http://</code> and <code>http://</code>
+  protocols.</li>
 <li>If a protocol is not specified or an incorrect one is provided, an error
   state should be activated.</li>
 <li>If no <code>SecretRef</code> is defined, access will be anonymous (no authentication).</li>
@@ -2266,7 +2304,7 @@ Autopilot to set the <code>Authorization</code> header to <code>Bearer abc123def
     <script id="__config" type="application/json">{"base": "../..", "features": ["toc.autohide", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
       
     
   </body>
